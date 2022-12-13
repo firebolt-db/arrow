@@ -107,7 +107,7 @@ constexpr size_t kAlignment = 64;
 
 constexpr char kDefaultBackendEnvVar[] = "ARROW_DEFAULT_MEMORY_POOL";
 
-enum class MemoryPoolBackend : uint8_t { System, Jemalloc, Mimalloc };
+enum class MemoryPoolBackend : uint8_t { System, Jemalloc, Mimalloc, Firebolt };
 
 struct SupportedBackend {
   const char* name;
@@ -122,6 +122,7 @@ struct SupportedBackend {
 
 const std::vector<SupportedBackend>& SupportedBackends() {
   static std::vector<SupportedBackend> backends = {
+    {"firebolt", MemoryPoolBackend::Firebolt},
   // ARROW-12316: Apple => mimalloc first, then jemalloc
   //              non-Apple => jemalloc first, then mimalloc
 #if defined(ARROW_JEMALLOC) && !defined(__APPLE__)
@@ -270,6 +271,61 @@ class SystemAllocator {
     ARROW_UNUSED(malloc_trim(0));
 #endif
   }
+};
+
+class FireboltAllocator {
+public:
+    // Allocate memory according to the alignment requirements for Arrow
+    // (as of May 2016 64 bytes)
+    static Status AllocateAligned(int64_t size, uint8_t **out) {
+        if (size == 0) {
+            *out = zero_size_area;
+            return Status::OK();
+        }
+        *out = new(std::align_val_t(kAlignment)) uint8_t[size * sizeof(uint8_t)];
+        return Status::OK();
+    }
+
+    static Status ReallocateAligned(int64_t old_size, int64_t new_size, uint8_t **ptr) {
+        uint8_t *previous_ptr = *ptr;
+        if (previous_ptr == zero_size_area) {
+                    DCHECK_EQ(old_size, 0);
+            return AllocateAligned(new_size, ptr);
+        }
+        if (new_size == 0) {
+            DeallocateAligned(previous_ptr, old_size);
+            *ptr = zero_size_area;
+            return Status::OK();
+        }
+        // Note: We cannot use realloc() here as it doesn't guarantee alignment.
+
+        // Allocate new chunk
+        uint8_t *out = nullptr;
+        RETURN_NOT_OK(AllocateAligned(new_size, &out));
+                DCHECK(out);
+        // Copy contents and release old memory chunk
+        memcpy(out, *ptr, static_cast<size_t>(std::min(new_size, old_size)));
+
+        operator delete[](*ptr, std::align_val_t(kAlignment));
+        *ptr = out;
+        return Status::OK();
+    }
+
+    static void DeallocateAligned(uint8_t *ptr, int64_t size) {
+        if (ptr == zero_size_area) {
+                    DCHECK_EQ(size, 0);
+        } else {
+            operator delete[](ptr, std::align_val_t(kAlignment));
+        }
+    }
+
+    static void ReleaseUnused() {
+#ifdef __GLIBC__
+        // The return value of malloc_trim is not an error but to inform
+        // you if memory was actually released or not, which we do not care about here
+        ARROW_UNUSED(malloc_trim(0));
+#endif
+    }
 };
 
 #ifdef ARROW_JEMALLOC
@@ -461,6 +517,11 @@ class BaseMemoryPoolImpl : public MemoryPool {
   internal::MemoryPoolStats stats_;
 };
 
+class FireboltMemoryPool : public BaseMemoryPoolImpl<FireboltAllocator> {
+public:
+    std::string backend_name() const override { return "firebolt"; }
+};
+
 class SystemMemoryPool : public BaseMemoryPoolImpl<SystemAllocator> {
  public:
   std::string backend_name() const override { return "system"; }
@@ -483,6 +544,8 @@ class MimallocMemoryPool : public BaseMemoryPoolImpl<MimallocAllocator> {
 std::unique_ptr<MemoryPool> MemoryPool::CreateDefault() {
   auto backend = DefaultBackend();
   switch (backend) {
+    case MemoryPoolBackend::Firebolt:
+      return std::unique_ptr<MemoryPool>(new FireboltMemoryPool);
     case MemoryPoolBackend::System:
       return std::unique_ptr<MemoryPool>(new SystemMemoryPool);
 #ifdef ARROW_JEMALLOC
@@ -506,6 +569,7 @@ static struct GlobalState {
 
   std::atomic<bool> finalizing{false};  // constructed first, destroyed last
 
+  FireboltMemoryPool firebolt_pool;
   SystemMemoryPool system_pool;
 #ifdef ARROW_JEMALLOC
   JemallocMemoryPool jemalloc_pool;
@@ -538,6 +602,8 @@ Status mimalloc_memory_pool(MemoryPool** out) {
 MemoryPool* default_memory_pool() {
   auto backend = DefaultBackend();
   switch (backend) {
+    case MemoryPoolBackend::Firebolt:
+      return &global_state.firebolt_pool;
     case MemoryPoolBackend::System:
       return &global_state.system_pool;
 #ifdef ARROW_JEMALLOC
