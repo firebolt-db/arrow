@@ -70,7 +70,7 @@ namespace {
 constexpr char kDefaultBackendEnvVar[] = "ARROW_DEFAULT_MEMORY_POOL";
 constexpr char kDebugMemoryEnvVar[] = "ARROW_DEBUG_MEMORY_POOL";
 
-enum class MemoryPoolBackend : uint8_t { System, Jemalloc, Mimalloc };
+enum class MemoryPoolBackend : uint8_t { System, Jemalloc, Mimalloc, Firebolt };
 
 struct SupportedBackend {
   const char* name;
@@ -85,10 +85,12 @@ struct SupportedBackend {
 
 const std::vector<SupportedBackend>& SupportedBackends() {
   static std::vector<SupportedBackend> backends = {
-  // mimalloc is our preferred allocator for several reasons:
-  // 1) it has good performance
-  // 2) it is well-supported on all our main platforms (Linux, macOS, Windows)
-  // 3) it is easy to configure and has a consistent API.
+    {"firebolt", MemoryPoolBackend::Firebolt},
+  // ARROW-12316: Apple => mimalloc first, then jemalloc
+  //              non-Apple => jemalloc first, then mimalloc
+#if defined(ARROW_JEMALLOC) && !defined(__APPLE__)
+    {"jemalloc", MemoryPoolBackend::Jemalloc},
+#endif
 #ifdef ARROW_MIMALLOC
       {"mimalloc", MemoryPoolBackend::Mimalloc},
 #endif
@@ -390,6 +392,70 @@ class SystemAllocator {
   }
 };
 
+// Firebolt Allocator that uses operator new/delete and other tracked allocations
+// functions to ensure proper MemoryTracker integration
+class FireboltAllocator {
+ public:
+  static Status AllocateAligned(int64_t size, int64_t alignment, uint8_t** out) {
+    if (size == 0) {
+      *out = memory_pool::internal::kZeroSizeArea;
+      return Status::OK();
+    }
+    *out = new (static_cast<std::align_val_t>(alignment)) uint8_t[size * sizeof(uint8_t)];
+    return Status::OK();
+  }
+
+  static Status ReallocateAligned(int64_t old_size, int64_t new_size, int64_t alignment,
+                                  uint8_t** ptr) {
+    uint8_t* previous_ptr = *ptr;
+    if (previous_ptr == memory_pool::internal::kZeroSizeArea) {
+      DCHECK_EQ(old_size, 0);
+      return AllocateAligned(new_size, alignment, ptr);
+    }
+    if (new_size == 0) {
+      DeallocateAligned(previous_ptr, old_size, alignment);
+      *ptr = memory_pool::internal::kZeroSizeArea;
+      return Status::OK();
+    }
+    // Note: We cannot use realloc() here as it doesn't guarantee alignment.
+
+    // Allocate new chunk
+    uint8_t* out = nullptr;
+    RETURN_NOT_OK(AllocateAligned(new_size, alignment, &out));
+    DCHECK(out);
+    // Copy contents and release old memory chunk
+    memcpy(out, *ptr, static_cast<size_t>(std::min(new_size, old_size)));
+
+    operator delete[](*ptr, static_cast<std::align_val_t>(alignment));
+    *ptr = out;
+    return Status::OK();
+  }
+
+  static void DeallocateAligned(uint8_t* ptr, int64_t size, int64_t alignment) {
+    if (ptr == memory_pool::internal::kZeroSizeArea) {
+      DCHECK_EQ(size, 0);
+    } else {
+      operator delete[](ptr, static_cast<std::align_val_t>(alignment));
+    }
+  }
+
+  static void ReleaseUnused() {
+#ifdef ARROW_JEMALLOC
+    // the FireboltAllocator uses jemalloc under the hood (except in sanitizer
+    // builds, so check the flag) -> just call JemallocAllocator::ReleaseUnused
+    memory_pool::internal::JemallocAllocator::ReleaseUnused();
+#else
+#ifdef __GLIBC__
+    // The return value of malloc_trim is not an error but to inform
+    // you if memory was actually released or not, which we do not care about here
+    ARROW_UNUSED(malloc_trim(0));
+#endif
+#endif
+  }
+
+  static void PrintStats() { }
+};
+
 #ifdef ARROW_MIMALLOC
 
 // Helper class directing allocations to the mimalloc allocator.
@@ -538,6 +604,11 @@ class BaseMemoryPoolImpl : public MemoryPool {
   internal::MemoryPoolStats stats_;
 };
 
+class FireboltMemoryPool : public BaseMemoryPoolImpl<FireboltAllocator> {
+ public:
+  std::string backend_name() const override { return "firebolt"; }
+};
+
 class SystemMemoryPool : public BaseMemoryPoolImpl<SystemAllocator> {
  public:
   std::string backend_name() const override { return "system"; }
@@ -579,6 +650,8 @@ class MimallocDebugMemoryPool
 std::unique_ptr<MemoryPool> MemoryPool::CreateDefault() {
   auto backend = DefaultBackend();
   switch (backend) {
+    case MemoryPoolBackend::Firebolt:
+      return std::unique_ptr<MemoryPool>(new FireboltMemoryPool);
     case MemoryPoolBackend::System:
       return IsDebugEnabled() ? std::unique_ptr<MemoryPool>(new SystemDebugMemoryPool)
                               : std::unique_ptr<MemoryPool>(new SystemMemoryPool);
@@ -602,6 +675,8 @@ static struct GlobalState {
   ~GlobalState() { finalizing_.store(true, std::memory_order_relaxed); }
 
   bool is_finalizing() const { return finalizing_.load(std::memory_order_relaxed); }
+
+  MemoryPool* firebolt_memory_pool() { return &firebolt_pool_; }
 
   MemoryPool* system_memory_pool() {
     if (IsDebugEnabled()) {
@@ -634,6 +709,7 @@ static struct GlobalState {
  private:
   std::atomic<bool> finalizing_{false};  // constructed first, destroyed last
 
+  FireboltMemoryPool firebolt_pool_;
   SystemMemoryPool system_pool_;
   SystemDebugMemoryPool system_debug_pool_;
 #ifdef ARROW_JEMALLOC
@@ -669,6 +745,8 @@ Status mimalloc_memory_pool(MemoryPool** out) {
 MemoryPool* default_memory_pool() {
   auto backend = DefaultBackend();
   switch (backend) {
+    case MemoryPoolBackend::Firebolt:
+      return global_state.firebolt_memory_pool();
     case MemoryPoolBackend::System:
       return global_state.system_memory_pool();
 #ifdef ARROW_JEMALLOC
