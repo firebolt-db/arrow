@@ -215,13 +215,13 @@ Status AppendTimestampBatch(liborc::ColumnVectorBatch* column_vector_batch,
     // Convert ORC's timestamp column with a resolution of nanoseconds to Arrow's
     // timestamp column with a resolution of microseconds by truncating to microseconds.
     int64_t seconds_us;
-    if (__builtin_smull_overflow(seconds[index], kOneSecondMicros, &seconds_us)) {
+    if (__builtin_smull_overflow(seconds[index], kOneSecondMicros, &seconds_us)) { [[unlikely]]
       error_message =
           "Overflow in ORC reader during conversion from seconds to microseconds";
     }
     const int64_t subseconds_us = nanos[index] / kOneMicroNanos;
     int64_t result;
-    if (__builtin_saddl_overflow(seconds_us, subseconds_us, &result)) {
+    if (__builtin_saddl_overflow(seconds_us, subseconds_us, &result)) { [[unlikely]]
       error_message =
           "Overflow in ORC reader when adding the microseconds to the seconds";
     }
