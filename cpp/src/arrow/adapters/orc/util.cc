@@ -195,6 +195,26 @@ Status AppendBoolBatch(liborc::ColumnVectorBatch* column_vector_batch, int64_t o
   return Status::OK();
 }
 
+// Functions to perform arithmetic with overflow checking. The compiler picks the correct
+// overload independent of whether int64_t is a long or a long long.
+namespace {
+inline bool mulOverflow(long int a, long int b, long int* res) {
+  return __builtin_smull_overflow(a, b, res);
+}
+
+inline bool mulOverflow(long long int a, long long int b, long long int* res) {
+  return __builtin_smulll_overflow(a, b, res);
+}
+
+inline bool addOverflow(long int a, long int b, long int* res) {
+  return __builtin_saddl_overflow(a, b, res);
+}
+
+inline bool addOverflow(long long int a, long long int b, long long int* res) {
+  return __builtin_saddll_overflow(a, b, res);
+}
+}  // namespace
+
 Status AppendTimestampBatch(liborc::ColumnVectorBatch* column_vector_batch,
                             int64_t offset, int64_t length, ArrayBuilder* abuilder) {
   auto builder = checked_cast<TimestampBuilder*>(abuilder);
@@ -212,15 +232,40 @@ Status AppendTimestampBatch(liborc::ColumnVectorBatch* column_vector_batch,
   const int64_t* seconds = batch->data.data() + offset;
   const int64_t* nanos = batch->nanoseconds.data() + offset;
 
-  auto transform_timestamp = [seconds, nanos](int64_t index) {
-    return seconds[index] * kOneSecondNanos + nanos[index];
+  // Firebolt Start
+  // If we detect an arithmetic overflow during the conversion from ORC to Arrow, we
+  // assign a C string with a description of the error to error_message. Otherwise,
+  // error_message remains nullptr.
+  const char* error_message = nullptr;
+  auto transform_timestamp = [seconds, nanos, &error_message](int64_t index) {
+    // Convert ORC's timestamp column with a resolution of nanoseconds to Arrow's
+    // timestamp column with a resolution of microseconds by truncating to microseconds.
+    int64_t seconds_us;
+    if (mulOverflow(seconds[index], kOneSecondMicros, &seconds_us)) { [[unlikely]]
+      error_message =
+          "Overflow in ORC reader during conversion from seconds to microseconds";
+    }
+    const int64_t subseconds_us = nanos[index] / kOneMicroNanos;
+    int64_t result;
+    if (addOverflow(seconds_us, subseconds_us, &result)) { [[unlikely]]
+      error_message =
+          "Overflow in ORC reader when adding the microseconds to the seconds";
+    }
+    return result;
   };
 
   auto transform_range = internal::MakeLazyRange(transform_timestamp, length);
 
   RETURN_NOT_OK(
       builder->AppendValues(transform_range.begin(), transform_range.end(), valid_bytes));
-  return Status::OK();
+
+  if (error_message) {
+    // Detected arithmetic overflow during the conversion from ORC to Arrow.
+    return Status::Invalid(error_message);
+  } else {
+    return Status::OK();
+  }
+  // Firebolt End
 }
 
 template <class BuilderType>
@@ -1125,11 +1170,25 @@ Result<std::shared_ptr<DataType>> GetArrowType(const liborc::Type* type) {
       // reader timezone to UTC to avoid any conversion so users can get the same values
       // as written. To get rid of this burden, TIMESTAMP_INSTANT type is always preferred
       // over TIMESTAMP type.
-      return timestamp(TimeUnit::NANO);
+
+      // Firebolt Start
+      // ORC stores timestamps in up to 128 bits with a resolution of nanoseconds. Arrow
+      // originally mapped that to its 64-bit timestamp type with a resolution of
+      // nanoseconds. An unfortunate consequence was that Arrow only supported the range
+      // between 1677-09-21 00:12:43 and 2262-04-11 23:47:16, which was less than the
+      // range supported by ORC and Firebolt. As Firebolt only supports a resolution of
+      // microseconds, we switched to Arrow's 64-bit timestamp type with microseconds
+      // resolution. Now, we can support the same range as Firebolt's timestamp type.
+      return timestamp(TimeUnit::MICRO);
+      // Firebolt End
     case liborc::TIMESTAMP_INSTANT:
       // Values of TIMESTAMP_INSTANT type are stored in the UTC timezone in the ORC file.
       // Both read and write use the UTC timezone without any conversion.
-      return timestamp(TimeUnit::NANO, "UTC");
+
+      // Firebolt Start
+      // Changed from NANO to MICRO here as well, see above
+      return timestamp(TimeUnit::MICRO, "UTC");
+      // Firebolt End
     case liborc::DATE:
       return date32();
     case liborc::DECIMAL: {
