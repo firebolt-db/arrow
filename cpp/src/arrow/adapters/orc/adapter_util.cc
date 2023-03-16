@@ -189,6 +189,26 @@ Status AppendBoolBatch(liborc::ColumnVectorBatch* column_vector_batch, int64_t o
   return Status::OK();
 }
 
+// Functions to perform arithmetic with overflow checking. The compiler picks the correct
+// overload independent of whether int64_t is a long or a long long.
+namespace {
+inline bool mulOverflow(long int a, long int b, long int* res) {
+  return __builtin_smull_overflow(a, b, res);
+}
+
+inline bool mulOverflow(long long int a, long long int b, long long int* res) {
+  return __builtin_smulll_overflow(a, b, res);
+}
+
+inline bool addOverflow(long int a, long int b, long int* res) {
+  return __builtin_saddl_overflow(a, b, res);
+}
+
+inline bool addOverflow(long long int a, long long int b, long long int* res) {
+  return __builtin_saddll_overflow(a, b, res);
+}
+}  // namespace
+
 Status AppendTimestampBatch(liborc::ColumnVectorBatch* column_vector_batch,
                             int64_t offset, int64_t length, ArrayBuilder* abuilder) {
   auto builder = checked_cast<TimestampBuilder*>(abuilder);
@@ -215,13 +235,13 @@ Status AppendTimestampBatch(liborc::ColumnVectorBatch* column_vector_batch,
     // Convert ORC's timestamp column with a resolution of nanoseconds to Arrow's
     // timestamp column with a resolution of microseconds by truncating to microseconds.
     int64_t seconds_us;
-    if (__builtin_smull_overflow(seconds[index], kOneSecondMicros, &seconds_us)) { [[unlikely]]
+    if (mulOverflow(seconds[index], kOneSecondMicros, &seconds_us)) { [[unlikely]]
       error_message =
           "Overflow in ORC reader during conversion from seconds to microseconds";
     }
     const int64_t subseconds_us = nanos[index] / kOneMicroNanos;
     int64_t result;
-    if (__builtin_saddl_overflow(seconds_us, subseconds_us, &result)) { [[unlikely]]
+    if (addOverflow(seconds_us, subseconds_us, &result)) { [[unlikely]]
       error_message =
           "Overflow in ORC reader when adding the microseconds to the seconds";
     }
