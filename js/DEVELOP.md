@@ -82,7 +82,7 @@ You can change the target you want to test by changing the imports in `perf/inde
 
 # Testing Bundling
 
-The bunldes use `apache-arrow` so make sure to build it with `yarn build -t apache-arrow`. To bundle with a variety of bundlers, run `yarn test:bundle` or `yarn gulp bundle`.
+The bundles use `apache-arrow` so make sure to build it with `yarn build -t apache-arrow`. To bundle with a variety of bundlers, run `yarn test:bundle` or `yarn gulp bundle`.
 
 Run `yarn gulp bundle:webpack:analyze` to open [Webpack Bundle Analyzer](https://github.com/webpack-contrib/webpack-bundle-analyzer).
 
@@ -115,6 +115,6 @@ Run `yarn gulp bundle:webpack:analyze` to open [Webpack Bundle Analyzer](https:/
 4. Execute `yarn lint` from the `js` directory to fix the linting errors
 
 [1]: mailto:dev-subscribe@arrow.apache.org
-[2]: https://github.com/apache/arrow/tree/master/format
+[2]: https://github.com/apache/arrow/tree/main/format
 [3]: https://github.com/apache/arrow/issues
 [4]: https://github.com/apache/arrow

@@ -86,25 +86,21 @@ Plans
 ^^^^^
 
  * A plan should have a single top-level relation.
- * The consumer is currently based on a custom build of Substrait that
-   is older than 0.1.0.  Any features added that are newer than 0.1.0 will
-   not be supported.
+ * The consumer is currently based on version 0.20.0 of Substrait.
+   Any features added that are newer will not be supported.
+ * Due to a breaking change in 0.20.0 any Substrait plan older than 0.20.0
+   will be rejected.
 
 Extensions
 ^^^^^^^^^^
 
  * If a plan contains any extension type variations it will be rejected.
- * If a plan contains any advanced extensions it will be rejected.
+ * Advanced extensions can be provided by supplying a custom implementation of
+   :class:`arrow::engine::ExtensionProvider`.
 
 Relations (in general)
 ^^^^^^^^^^^^^^^^^^^^^^
 
- * The ``emit`` property (to customize output order of a node or to drop
-   columns) is not supported and plans containing this property will
-   be rejected.
- * The ``hint`` property is not supported and plans containing this
-   property will be rejected.
- * Any advanced extensions will cause a plan to be rejected.
  * Any relation not explicitly listed below will not be supported
    and will cause the plan to be rejected.
 
@@ -113,12 +109,12 @@ Read Relations
 
  * The ``projection`` property is not supported and plans containing this
    property will be rejected.
- * The only supported read type is ``LocalFiles``.  Plans with any other
-   type will be rejected.
- * Only the parquet file format is currently supported.
+ * The ``VirtualTable`` and ``ExtensionTable`` read types are not supported.
+   Plans containing these types will be rejected.
+ * Only the parquet and arrow file formats are currently supported.
  * All URIs must use the ``file`` scheme
  * ``partition_index``, ``start``, and ``length`` are not supported.  Plans containing
-   these properties will be rejected.
+   non-default values for these properties will be rejected.
  * The Substrait spec requires that a ``filter`` be completely satisfied by a read
    relation.  However, Acero only uses a read filter for pushdown projection and
    it may not be fully satisfied.  Users should generally attach an additional
@@ -127,7 +123,7 @@ Read Relations
 Filter Relations
 ^^^^^^^^^^^^^^^^
 
- * No know caveats
+ * No known caveats
 
 Project Relations
 ^^^^^^^^^^^^^^^^^
@@ -152,7 +148,8 @@ Aggregate Relations
  * Each measure's arguments must be direct references.
  * A measure may not have a filter
  * A measure may not have sorts
- * A measure's invocation must be AGGREGATION_INVOCATION_ALL
+ * A measure's invocation must be AGGREGATION_INVOCATION_ALL or 
+   AGGREGATION_INVOCATION_UNSPECIFIED
  * A measure's phase must be AGGREGATION_PHASE_INITIAL_TO_RESULT
 
 Expressions (general)
@@ -163,8 +160,6 @@ Expressions (general)
    grouping set.  Acero typically expects these expressions to be direct references.
    Planners should extract the implicit projection into a formal project relation
    before delivering the plan to Acero.
- * Older versions of Isthmus would omit optional arguments instead of including them
-   as unspecified enums.  Acero will not support these plans.
 
 Literals
 ^^^^^^^^
@@ -180,7 +175,7 @@ Types
    classes that are currently supported
 
 .. list-table:: Substrait / Arrow Type Mapping
-   :widths: 25 25
+   :widths: 25 25 50
    :header-rows: 1
 
    * - Substrait Type
@@ -191,9 +186,6 @@ Types
      - 
    * - i8
      - int8
-     - 
-   * - i16
-     - int16
      - 
    * - i16
      - int16
@@ -265,7 +257,6 @@ Types
 Functions
 ^^^^^^^^^
 
- * Acero does not support the legacy ``args`` style of declaring arguments
  * The following functions have caveats or are not supported at all.  Note that
    this is not a comprehensive list.  Functions are being added to Substrait at
    a rapid pace and new functions may be missing.
@@ -286,8 +277,12 @@ Functions
      * ``count_distinct``
      * ``approx_count_distinct``
 
- * The functions above must be referenced using the URI
-   ``https://github.com/apache/arrow/blob/master/format/substrait/extension_types.yaml``
+ * The functions above should be referenced using the URI
+   ``https://github.com/apache/arrow/blob/main/format/substrait/extension_types.yaml``
+
+     * Alternatively, the URI can be left completely empty and Acero will match
+       based only on function name.  This fallback mechanism is non-standard and should
+       be avoided if possible.
 
 Architecture Overview
 =====================
@@ -410,10 +405,6 @@ their completion::
 
 Constructing ``ExecPlan`` objects
 =================================
-
-.. warning::
-
-    The following will be superceded by construction from Compute IR, see ARROW-14074.
 
 None of the concrete implementations of :class:`ExecNode` are exposed
 in headers, so they can't be constructed directly outside the
@@ -658,8 +649,9 @@ Example of using ``table_source``
 ----------
 
 ``filter`` operation, as the name suggests, provides an option to define data filtering 
-criteria. It selects rows matching a given expression. Filters can be written using 
-:class:`arrow::compute::Expression`. For example, if we wish to keep rows where the value 
+criteria. It selects rows where the given expression evaluates to true. Filters can be written using
+:class:`arrow::compute::Expression`, and the expression should have a return type of boolean.
+For example, if we wish to keep rows where the value
 of column ``b`` is greater than 3,  then we can use the following expression.
 
 Filter example:
@@ -678,8 +670,11 @@ Filter example:
 
 ``project`` operation rearranges, deletes, transforms, and creates columns.
 Each output column is computed by evaluating an expression
-against the source record batch. This is exposed via 
-:class:`arrow::compute::ProjectNodeOptions` which requires,
+against the source record batch. These must be scalar expressions
+(expressions consisting of scalar literals, field references and scalar
+functions, i.e. elementwise functions that return one value for each input
+row independent of the value of all other rows).
+This is exposed via :class:`arrow::compute::ProjectNodeOptions` which requires,
 an :class:`arrow::compute::Expression` and name for each of the output columns (if names are not
 provided, the string representations of exprs will be used).  
 

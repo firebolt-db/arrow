@@ -18,7 +18,7 @@
 #include "arrow/compute/api_aggregate.h"
 #include "arrow/compute/kernels/aggregate_basic_internal.h"
 #include "arrow/compute/kernels/aggregate_internal.h"
-#include "arrow/compute/kernels/common.h"
+#include "arrow/compute/kernels/common_internal.h"
 #include "arrow/compute/kernels/util_internal.h"
 #include "arrow/util/cpu_info.h"
 #include "arrow/util/hashing.h"
@@ -46,9 +46,10 @@ Status AggregateFinalize(KernelContext* ctx, Datum* out) {
 }  // namespace
 
 void AddAggKernel(std::shared_ptr<KernelSignature> sig, KernelInit init,
-                  ScalarAggregateFunction* func, SimdLevel::type simd_level) {
+                  ScalarAggregateFunction* func, SimdLevel::type simd_level,
+                  const bool ordered) {
   ScalarAggregateKernel kernel(std::move(sig), std::move(init), AggregateConsume,
-                               AggregateMerge, AggregateFinalize);
+                               AggregateMerge, AggregateFinalize, ordered);
   // Set the simd level
   kernel.simd_level = simd_level;
   DCHECK_OK(func->AddKernel(std::move(kernel)));
@@ -56,9 +57,9 @@ void AddAggKernel(std::shared_ptr<KernelSignature> sig, KernelInit init,
 
 void AddAggKernel(std::shared_ptr<KernelSignature> sig, KernelInit init,
                   ScalarAggregateFinalize finalize, ScalarAggregateFunction* func,
-                  SimdLevel::type simd_level) {
+                  SimdLevel::type simd_level, const bool ordered) {
   ScalarAggregateKernel kernel(std::move(sig), std::move(init), AggregateConsume,
-                               AggregateMerge, std::move(finalize));
+                               AggregateMerge, std::move(finalize), ordered);
   // Set the simd level
   kernel.simd_level = simd_level;
   DCHECK_OK(func->AddKernel(std::move(kernel)));
@@ -67,7 +68,28 @@ void AddAggKernel(std::shared_ptr<KernelSignature> sig, KernelInit init,
 namespace {
 
 // ----------------------------------------------------------------------
-// Count implementation
+// Count implementations
+
+struct CountAllImpl : public ScalarAggregator {
+  Status Consume(KernelContext*, const ExecSpan& batch) override {
+    this->count += batch.length;
+    return Status::OK();
+  }
+
+  Status MergeFrom(KernelContext*, KernelState&& src) override {
+    const auto& other_state = checked_cast<const CountAllImpl&>(src);
+    this->count += other_state.count;
+    return Status::OK();
+  }
+
+  Status Finalize(KernelContext* ctx, Datum* out) override {
+    const auto& state = checked_cast<const CountAllImpl&>(*ctx->state());
+    *out = Datum(state.count);
+    return Status::OK();
+  }
+
+  int64_t count = 0;
+};
 
 struct CountImpl : public ScalarAggregator {
   explicit CountImpl(CountOptions options) : options(std::move(options)) {}
@@ -117,6 +139,11 @@ struct CountImpl : public ScalarAggregator {
   int64_t non_nulls = 0;
   int64_t nulls = 0;
 };
+
+Result<std::unique_ptr<KernelState>> CountAllInit(KernelContext*,
+                                                  const KernelInitArgs& args) {
+  return std::make_unique<CountAllImpl>();
+}
 
 Result<std::unique_ptr<KernelState>> CountInit(KernelContext*,
                                                const KernelInitArgs& args) {
@@ -412,6 +439,45 @@ struct ProductInit {
     return visitor.Create();
   }
 };
+
+// ----------------------------------------------------------------------
+// FirstLast implementation
+
+Result<std::unique_ptr<KernelState>> FirstLastInit(KernelContext* ctx,
+                                                   const KernelInitArgs& args) {
+  ARROW_ASSIGN_OR_RAISE(TypeHolder out_type,
+                        args.kernel->signature->out_type().Resolve(ctx, args.inputs));
+
+  FirstLastInitState visitor(ctx, *args.inputs[0], out_type.GetSharedPtr(),
+                             static_cast<const ScalarAggregateOptions&>(*args.options));
+  return visitor.Create();
+}
+
+// For "first" and "last" functions: override finalize and return the actual value
+template <FirstOrLast first_or_last>
+void AddFirstOrLastAggKernel(ScalarAggregateFunction* func,
+                             ScalarAggregateFunction* first_last_func) {
+  auto sig = KernelSignature::Make({InputType::Any()}, FirstType);
+  auto init = [first_last_func](
+                  KernelContext* ctx,
+                  const KernelInitArgs& args) -> Result<std::unique_ptr<KernelState>> {
+    ARROW_ASSIGN_OR_RAISE(auto kernel, first_last_func->DispatchExact(args.inputs));
+    KernelInitArgs new_args{kernel, args.inputs, args.options};
+    return kernel->init(ctx, new_args);
+  };
+
+  auto finalize = [](KernelContext* ctx, Datum* out) -> Status {
+    Datum temp;
+    RETURN_NOT_OK(checked_cast<ScalarAggregator*>(ctx->state())->Finalize(ctx, &temp));
+    const auto& result = temp.scalar_as<StructScalar>();
+    DCHECK(result.is_valid);
+    *out = result.value[static_cast<uint8_t>(first_or_last)];
+    return Status::OK();
+  };
+
+  AddAggKernel(std::move(sig), std::move(init), std::move(finalize), func,
+               SimdLevel::NONE, /*ordered=*/true);
+}
 
 // ----------------------------------------------------------------------
 // MinMax implementation
@@ -809,6 +875,25 @@ Result<TypeHolder> MinMaxType(KernelContext*, const std::vector<TypeHolder>& typ
 
 }  // namespace
 
+Result<TypeHolder> FirstLastType(KernelContext*, const std::vector<TypeHolder>& types) {
+  auto ty = types.front().GetSharedPtr();
+  return struct_({field("first", ty), field("last", ty)});
+}
+
+void AddFirstLastKernel(KernelInit init, internal::detail::GetTypeId get_id,
+                        ScalarAggregateFunction* func, SimdLevel::type simd_level) {
+  auto sig = KernelSignature::Make({InputType(get_id.id)}, FirstLastType);
+  AddAggKernel(std::move(sig), init, func, simd_level);
+}
+
+void AddFirstLastKernels(KernelInit init,
+                         const std::vector<std::shared_ptr<DataType>>& types,
+                         ScalarAggregateFunction* func) {
+  for (const auto& ty : types) {
+    AddFirstLastKernel(init, ty, func, SimdLevel::NONE);
+  }
+}
+
 void AddMinMaxKernel(KernelInit init, internal::detail::GetTypeId get_id,
                      ScalarAggregateFunction* func, SimdLevel::type simd_level) {
   auto sig = KernelSignature::Make({InputType(get_id.id)}, MinMaxType);
@@ -824,6 +909,9 @@ void AddMinMaxKernels(KernelInit init,
 }
 
 namespace {
+
+const FunctionDoc count_all_doc{
+    "Count the number of rows", "This version of count takes no arguments.", {}};
 
 const FunctionDoc count_doc{"Count the number of null / non-null values",
                             ("By default, only non-null values are counted.\n"
@@ -862,6 +950,30 @@ const FunctionDoc mean_doc{
      "and a decimal with the same bit-width/precision/scale for decimal arguments.\n"
      "For integers and floats, NaN is returned if min_count = 0 and\n"
      "there are no values. For decimals, null is returned instead."),
+    {"array"},
+    "ScalarAggregateOptions"};
+
+const FunctionDoc first_last_doc{
+    "Compute the first and last values of an array",
+    ("Null values are ignored by default.\n"
+     "If skip_nulls = false, then this will return the first and last values\n"
+     "regardless if it is null"),
+    {"array"},
+    "ScalarAggregateOptions"};
+
+const FunctionDoc first_doc{
+    "Compute the first value in each group",
+    ("Null values are ignored by default.\n"
+     "If skip_nulls = false, then this will return the first and last values\n"
+     "regardless if it is null"),
+    {"array"},
+    "ScalarAggregateOptions"};
+
+const FunctionDoc last_doc{
+    "Compute the first value in each group",
+    ("Null values are ignored by default.\n"
+     "If skip_nulls = false, then this will return the first and last values\n"
+     "regardless if it is null"),
     {"array"},
     "ScalarAggregateOptions"};
 
@@ -907,8 +1019,15 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
   static auto default_scalar_aggregate_options = ScalarAggregateOptions::Defaults();
   static auto default_count_options = CountOptions::Defaults();
 
-  auto func = std::make_shared<ScalarAggregateFunction>(
-      "count", Arity::Unary(), count_doc, &default_count_options);
+  auto func = std::make_shared<ScalarAggregateFunction>("count_all", Arity::Nullary(),
+                                                        count_all_doc, NULLPTR);
+
+  // Takes no input (counts all rows), outputs int64 scalar
+  AddAggKernel(KernelSignature::Make({}, int64()), CountAllInit, func.get());
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+  func = std::make_shared<ScalarAggregateFunction>("count", Arity::Unary(), count_doc,
+                                                   &default_count_options);
 
   // Takes any input, outputs int64 scalar
   InputType any_input;
@@ -970,6 +1089,29 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
 #endif
   DCHECK_OK(registry->AddFunction(std::move(func)));
 
+  // Add first last function
+  func = std::make_shared<ScalarAggregateFunction>(
+      "first_last", Arity::Unary(), first_last_doc, &default_scalar_aggregate_options);
+  auto first_last_func = func.get();
+
+  AddFirstLastKernels(FirstLastInit, {boolean(), fixed_size_binary(1)}, func.get());
+  AddFirstLastKernels(FirstLastInit, NumericTypes(), func.get());
+  AddFirstLastKernels(FirstLastInit, BaseBinaryTypes(), func.get());
+  AddFirstLastKernels(FirstLastInit, TemporalTypes(), func.get());
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+  // Add first/last as convience functions
+  func = std::make_shared<ScalarAggregateFunction>("first", Arity::Unary(), first_doc,
+                                                   &default_scalar_aggregate_options);
+  AddFirstOrLastAggKernel<FirstOrLast::First>(func.get(), first_last_func);
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+  func = std::make_shared<ScalarAggregateFunction>("last", Arity::Unary(), last_doc,
+                                                   &default_scalar_aggregate_options);
+  AddFirstOrLastAggKernel<FirstOrLast::Last>(func.get(), first_last_func);
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+  // Add min max function
   func = std::make_shared<ScalarAggregateFunction>("min_max", Arity::Unary(), min_max_doc,
                                                    &default_scalar_aggregate_options);
   AddMinMaxKernels(MinMaxInit, {null(), boolean()}, func.get());

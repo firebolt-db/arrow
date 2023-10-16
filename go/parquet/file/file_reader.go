@@ -25,10 +25,10 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/apache/arrow/go/v11/arrow/memory"
-	"github.com/apache/arrow/go/v11/parquet"
-	"github.com/apache/arrow/go/v11/parquet/internal/encryption"
-	"github.com/apache/arrow/go/v11/parquet/metadata"
+	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow/go/v13/parquet"
+	"github.com/apache/arrow/go/v13/parquet/internal/encryption"
+	"github.com/apache/arrow/go/v13/parquet/metadata"
 	"golang.org/x/xerrors"
 )
 
@@ -163,7 +163,7 @@ func (f *Reader) parseMetaData() error {
 	buf := make([]byte, footerSize)
 	// backup 8 bytes to read the footer size (first four bytes) and the magic bytes (last 4 bytes)
 	n, err := f.r.ReadAt(buf, f.footerOffset-int64(footerSize))
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return fmt.Errorf("parquet: could not read footer: %w", err)
 	}
 	if n != len(buf) {

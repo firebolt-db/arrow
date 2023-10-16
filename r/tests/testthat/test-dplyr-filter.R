@@ -18,6 +18,8 @@
 library(dplyr, warn.conflicts = FALSE)
 library(stringr)
 
+skip_if_not_available("acero")
+
 tbl <- example_data
 # Add some better string data
 tbl$verses <- verses[[1]]
@@ -219,27 +221,9 @@ test_that("filter() with between()", {
 
   compare_dplyr_binding(
     .input %>%
-      filter(between(dbl, 1, "2")) %>%
-      collect(),
-    tbl
-  )
-
-  compare_dplyr_binding(
-    .input %>%
       filter(between(dbl, 1, NA)) %>%
       collect(),
     tbl
-  )
-
-  expect_warning(
-    compare_dplyr_binding(
-      .input %>%
-        filter(between(chr, 1, 2)) %>%
-        collect(),
-      tbl
-    ),
-    # the dplyr version warns:
-    "NAs introduced by coercion"
   )
 })
 

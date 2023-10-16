@@ -22,13 +22,10 @@ package hashing
 import (
 	"bytes"
 	"math"
-	"math/bits"
 	"reflect"
 	"unsafe"
 
-	"github.com/apache/arrow/go/v11/parquet"
-
-	"github.com/zeebo/xxh3"
+	"github.com/apache/arrow/go/v13/parquet"
 )
 
 //go:generate go run ../../arrow/_tools/tmpl/main.go -i -data=types.tmpldata xxh3_memo_table.gen.go.tmpl
@@ -74,78 +71,6 @@ type NumericMemoTable interface {
 	MemoTable
 	WriteOutLE(out []byte)
 	WriteOutSubsetLE(offset int, out []byte)
-}
-
-func hashInt(val uint64, alg uint64) uint64 {
-	// Two of xxhash's prime multipliers (which are chosen for their
-	// bit dispersion properties)
-	var multipliers = [2]uint64{11400714785074694791, 14029467366897019727}
-	// Multiplying by the prime number mixes the low bits into the high bits,
-	// then byte-swapping (which is a single CPU instruction) allows the
-	// combined high and low bits to participate in the initial hash table index.
-	return bits.ReverseBytes64(multipliers[alg] * val)
-}
-
-func hashFloat32(val float32, alg uint64) uint64 {
-	// grab the raw byte pattern of the
-	bt := *(*[4]byte)(unsafe.Pointer(&val))
-	x := uint64(*(*uint32)(unsafe.Pointer(&bt[0])))
-	hx := hashInt(x, alg)
-	hy := hashInt(x, alg^1)
-	return 4 ^ hx ^ hy
-}
-
-func hashFloat64(val float64, alg uint64) uint64 {
-	bt := *(*[8]byte)(unsafe.Pointer(&val))
-	hx := hashInt(uint64(*(*uint32)(unsafe.Pointer(&bt[4]))), alg)
-	hy := hashInt(uint64(*(*uint32)(unsafe.Pointer(&bt[0]))), alg^1)
-	return 8 ^ hx ^ hy
-}
-
-func hashString(val string, alg uint64) uint64 {
-	buf := *(*[]byte)(unsafe.Pointer(&val))
-	(*reflect.SliceHeader)(unsafe.Pointer(&buf)).Cap = len(val)
-	return hash(buf, alg)
-}
-
-// prime constants used for slightly increasing the hash quality further
-var exprimes = [2]uint64{1609587929392839161, 9650029242287828579}
-
-// for smaller amounts of bytes this is faster than even calling into
-// xxh3 to do the hash, so we specialize in order to get the benefits
-// of that performance.
-func hash(b []byte, alg uint64) uint64 {
-	n := uint32(len(b))
-	if n <= 16 {
-		switch {
-		case n > 8:
-			// 8 < length <= 16
-			// apply same principle as above, but as two 64-bit ints
-			x := *(*uint64)(unsafe.Pointer(&b[n-8]))
-			y := *(*uint64)(unsafe.Pointer(&b[0]))
-			hx := hashInt(x, alg)
-			hy := hashInt(y, alg^1)
-			return uint64(n) ^ hx ^ hy
-		case n >= 4:
-			// 4 < length <= 8
-			// we can read the bytes as two overlapping 32-bit ints, apply different
-			// hash functions to each in parallel
-			// then xor the results
-			x := *(*uint32)(unsafe.Pointer(&b[n-4]))
-			y := *(*uint32)(unsafe.Pointer(&b[0]))
-			hx := hashInt(uint64(x), alg)
-			hy := hashInt(uint64(y), alg^1)
-			return uint64(n) ^ hx ^ hy
-		case n > 0:
-			x := uint32((n << 24) ^ (uint32(b[0]) << 16) ^ (uint32(b[n/2]) << 8) ^ uint32(b[n-1]))
-			return hashInt(uint64(x), alg)
-		case n == 0:
-			return 1
-		}
-	}
-
-	// increase differentiation enough to improve hash quality
-	return xxh3.Hash(b) + exprimes[alg]
 }
 
 const (
@@ -342,6 +267,11 @@ func (b *BinaryMemoTable) GetOrInsertNull() (idx int, found bool) {
 // helper function to get the offset into the builder data for a given
 // index value.
 func (b *BinaryMemoTable) findOffset(idx int) uintptr {
+	if b.builder.DataLen() == 0 {
+		// only empty strings, short circuit
+		return 0
+	}
+
 	val := b.builder.Value(idx)
 	for len(val) == 0 {
 		idx++
@@ -379,6 +309,31 @@ func (b *BinaryMemoTable) CopyOffsetsSubset(start int, out []int32) {
 	}
 
 	out[sz-start] = int32(b.builder.DataLen() - (int(delta) - int(first)))
+}
+
+// CopyLargeOffsets copies the list of offsets into the passed in slice, the offsets
+// being the start and end values of the underlying allocated bytes in the builder
+// for the individual values of the table. out should be at least sized to Size()+1
+func (b *BinaryMemoTable) CopyLargeOffsets(out []int64) {
+	b.CopyLargeOffsetsSubset(0, out)
+}
+
+// CopyLargeOffsetsSubset is like CopyOffsets but instead of copying all of the offsets,
+// it gets a subset of the offsets in the table starting at the index provided by "start".
+func (b *BinaryMemoTable) CopyLargeOffsetsSubset(start int, out []int64) {
+	if b.builder.Len() <= start {
+		return
+	}
+
+	first := b.findOffset(0)
+	delta := b.findOffset(start)
+	sz := b.Size()
+	for i := start; i < sz; i++ {
+		offset := int64(b.findOffset(i) - delta)
+		out[i-start] = offset
+	}
+
+	out[sz-start] = int64(b.builder.DataLen() - (int(delta) - int(first)))
 }
 
 // CopyValues copies the raw binary data bytes out, out should be a []byte
@@ -428,19 +383,20 @@ func (b *BinaryMemoTable) CopyFixedWidthValues(start, width int, out []byte) {
 	}
 
 	var (
-		leftOffset = b.findOffset(start)
-		nullOffset = b.findOffset(null)
-		leftSize   = nullOffset - leftOffset
+		leftOffset  = b.findOffset(start)
+		nullOffset  = b.findOffset(null)
+		leftSize    = nullOffset - leftOffset
+		rightOffset = leftOffset + uintptr(b.ValuesSize())
 	)
 
 	if leftSize > 0 {
 		copy(out, b.builder.Value(start)[0:leftSize])
 	}
 
-	rightSize := b.ValuesSize() - int(nullOffset)
+	rightSize := rightOffset - nullOffset
 	if rightSize > 0 {
 		// skip the null fixed size value
-		copy(out[int(leftSize)+width:], b.builder.Value(int(nullOffset))[0:rightSize])
+		copy(out[int(leftSize)+width:], b.builder.Value(null + 1)[0:rightSize])
 	}
 }
 

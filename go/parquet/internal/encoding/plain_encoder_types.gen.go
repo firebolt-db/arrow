@@ -24,11 +24,11 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/apache/arrow/go/v11/arrow"
-	"github.com/apache/arrow/go/v11/arrow/endian"
-	"github.com/apache/arrow/go/v11/internal/bitutils"
-	"github.com/apache/arrow/go/v11/internal/utils"
-	"github.com/apache/arrow/go/v11/parquet"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/endian"
+	"github.com/apache/arrow/go/v13/internal/bitutils"
+	"github.com/apache/arrow/go/v13/internal/utils"
+	"github.com/apache/arrow/go/v13/parquet"
 	"golang.org/x/xerrors"
 )
 

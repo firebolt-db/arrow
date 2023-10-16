@@ -36,6 +36,7 @@ from pyarrow._compute import (  # noqa
     CumulativeSumOptions,
     DayOfWeekOptions,
     DictionaryEncodeOptions,
+    RunEndEncodeOptions,
     ElementWiseAggregateOptions,
     ExtractRegexOptions,
     FilterOptions,
@@ -54,6 +55,7 @@ from pyarrow._compute import (  # noqa
     RankOptions,
     ReplaceSliceOptions,
     ReplaceSubstringOptions,
+    RoundBinaryOptions,
     RoundOptions,
     RoundTemporalOptions,
     RoundToMultipleOptions,
@@ -78,9 +80,10 @@ from pyarrow._compute import (  # noqa
     function_registry,
     get_function,
     list_functions,
-    _group_by,
     # Udf
+    call_tabular_function,
     register_scalar_function,
+    register_tabular_function,
     ScalarUdfContext,
     # Expressions
     Expression,
@@ -317,6 +320,10 @@ def _make_global_functions():
             # Hash aggregate functions are not callable,
             # so let's not expose them at module level.
             continue
+        if func.kind == "scalar_aggregate" and func.arity == 0:
+            # Nullary scalar aggregate functions are not callable
+            # directly so let's not expose them at module level.
+            continue
         assert name not in g, name
         g[cpp_name] = g[name] = _wrap_function(name, func)
 
@@ -324,7 +331,7 @@ def _make_global_functions():
 _make_global_functions()
 
 
-def cast(arr, target_type=None, safe=None, options=None):
+def cast(arr, target_type=None, safe=None, options=None, memory_pool=None):
     """
     Cast array values to another data type. Can also be invoked as an array
     instance method.
@@ -338,6 +345,8 @@ def cast(arr, target_type=None, safe=None, options=None):
         Check for overflows or other unsafe conversions
     options : CastOptions, default None
         Additional checks pass by CastOptions
+    memory_pool : MemoryPool, optional
+        memory pool to use for allocations during function execution.
 
     Examples
     --------
@@ -374,6 +383,7 @@ def cast(arr, target_type=None, safe=None, options=None):
     Returns
     -------
     casted : Array
+        The cast result as a new Array
     """
     safe_vars_passed = (safe is not None) or (target_type is not None)
 
@@ -387,7 +397,7 @@ def cast(arr, target_type=None, safe=None, options=None):
             options = CastOptions.unsafe(target_type)
         else:
             options = CastOptions.safe(target_type)
-    return call_function("cast", [arr], options)
+    return call_function("cast", [arr], options, memory_pool)
 
 
 def index(data, value, start=None, end=None, *, memory_pool=None):
@@ -452,6 +462,7 @@ def take(data, indices, *, boundscheck=True, memory_pool=None):
     Returns
     -------
     result : depends on inputs
+        Selected values for the given indices
 
     Examples
     --------
@@ -490,6 +501,7 @@ def fill_null(values, fill_value):
     Returns
     -------
     result : depends on inputs
+        Values with all null elements replaced
 
     Examples
     --------
@@ -534,7 +546,8 @@ def top_k_unstable(values, k, sort_keys=None, *, memory_pool=None):
 
     Returns
     -------
-    result : Array of indices
+    result : Array
+        Indices of the top-k ordered elements
 
     Examples
     --------
@@ -581,6 +594,7 @@ def bottom_k_unstable(values, k, sort_keys=None, *, memory_pool=None):
     Returns
     -------
     result : Array of indices
+        Indices of the bottom-k ordered elements
 
     Examples
     --------
@@ -650,6 +664,7 @@ def field(*name_or_index):
     Returns
     -------
     field_expr : Expression
+        Reference to the given field
 
     Examples
     --------
@@ -691,5 +706,6 @@ def scalar(value):
     Returns
     -------
     scalar_expr : Expression
+        An Expression representing the scalar value
     """
     return Expression._scalar(value)

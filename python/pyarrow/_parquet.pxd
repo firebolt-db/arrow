@@ -417,6 +417,7 @@ cdef extern from "parquet/api/writer.h" namespace "parquet" nogil:
             Builder* encoding(ParquetEncoding encoding)
             Builder* encoding(const c_string& path,
                               ParquetEncoding encoding)
+            Builder* max_row_group_length(int64_t size)
             Builder* write_batch_size(int64_t batch_size)
             Builder* dictionary_pagesize_limit(int64_t dictionary_pagesize_limit)
             shared_ptr[WriterProperties] build()
@@ -574,7 +575,8 @@ cdef shared_ptr[ArrowWriterProperties] _create_arrow_writer_properties(
     coerce_timestamps=*,
     allow_truncated_timestamps=*,
     writer_engine_version=*,
-    use_compliant_nested_type=*) except *
+    use_compliant_nested_type=*,
+    store_schema=*) except *
 
 cdef class ParquetSchema(_Weakrefable):
     cdef:

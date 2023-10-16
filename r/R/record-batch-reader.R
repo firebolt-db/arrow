@@ -100,7 +100,11 @@ RecordBatchReader <- R6Class("RecordBatchReader",
     read_table = function() Table__from_RecordBatchReader(self),
     Close = function() RecordBatchReader__Close(self),
     export_to_c = function(stream_ptr) ExportRecordBatchReader(self, stream_ptr),
-    ToString = function() self$schema$ToString()
+    ToString = function() self$schema$ToString(),
+    .unsafe_delete = function() {
+      RecordBatchReader__UnsafeDelete(self)
+      super$.unsafe_delete()
+    }
   ),
   active = list(
     schema = function() RecordBatchReader__schema(self)
@@ -233,6 +237,7 @@ as_record_batch_reader.RecordBatch <- function(x, ...) {
 #' @rdname as_record_batch_reader
 #' @export
 as_record_batch_reader.data.frame <- function(x, ...) {
+  check_named_cols(x)
   RecordBatchReader$create(as_record_batch(x))
 }
 
@@ -255,6 +260,8 @@ as_record_batch_reader.arrow_dplyr_query <- function(x, ...) {
   # See query-engine.R for ExecPlan/Nodes
   plan <- ExecPlan$create()
   final_node <- plan$Build(x)
+  on.exit(plan$.unsafe_delete())
+
   plan$Run(final_node)
 }
 

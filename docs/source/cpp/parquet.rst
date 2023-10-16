@@ -27,7 +27,7 @@ Reading and writing Parquet files
 .. seealso::
    :ref:`Parquet reader and writer API reference <cpp-api-parquet>`.
 
-The `Parquet format <https://parquet.apache.org/documentation/latest/>`__
+The `Parquet format <https://parquet.apache.org/docs/>`__
 is a space-efficient columnar storage format for complex data.  The Parquet
 C++ implementation is part of the Apache Arrow project and benefits
 from tight integration with the Arrow C++ classes and facilities.
@@ -317,7 +317,6 @@ There are also Arrow-specific settings that can be configured with
    std::shared_ptr<ArrowWriterProperties> arrow_props = ArrowWriterProperties::Builder()
       .enable_deprecated_int96_timestamps() // default False
       ->store_schema() // default False
-      ->enable_compliant_nested_types() // default False
       ->build();
 
 These options mostly dictate how Arrow types are converted to Parquet types.
@@ -398,11 +397,11 @@ Encodings
 +--------------------------+----------+----------+---------+
 | BYTE_STREAM_SPLIT        | ✓        | ✓        |         |
 +--------------------------+----------+----------+---------+
-| DELTA_BINARY_PACKED      | ✓        |          |         |
+| DELTA_BINARY_PACKED      | ✓        | ✓        |         |
 +--------------------------+----------+----------+---------+
 | DELTA_BYTE_ARRAY         | ✓        |          |         |
 +--------------------------+----------+----------+---------+
-| DELTA_LENGTH_BYTE_ARRAY  | ✓        |          |         |
+| DELTA_LENGTH_BYTE_ARRAY  | ✓        | ✓        |         |
 +--------------------------+----------+----------+---------+
 
 * \(1) Only supported for encoding definition and repetition levels,
@@ -567,3 +566,27 @@ More specifically, Parquet C++ supports:
   supported.
 * EncryptionWithFooterKey and EncryptionWithColumnKey modes.
 * Encrypted Footer and Plaintext Footer modes.
+
+Miscellaneous
+-------------
+
++--------------------------+----------+----------+---------+
+| Feature                  | Reading  | Writing  | Notes   |
++==========================+==========+==========+=========+
+| Column Index             | ✓        |          | \(1)    |
++--------------------------+----------+----------+---------+
+| Offset Index             | ✓        |          | \(1)    |
++--------------------------+----------+----------+---------+
+| Bloom Filter             | ✓        | ✓        | \(2)    |
++--------------------------+----------+----------+---------+
+| CRC checksums            | ✓        | ✓        | \(3)    |
++--------------------------+----------+----------+---------+
+
+* \(1) Access to the Column and Offset Index structures is provided, but
+  data read APIs do not currently make any use of them.
+
+* \(2) APIs are provided for creating, serializing and deserializing Bloom
+  Filters, but they are not integrated into data read APIs.
+
+* \(3) For now, only the checksums of V1 Data Pages and Dictionary Pages
+  are computed.

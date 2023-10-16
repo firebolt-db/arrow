@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-skip_if_not(arrow_with_s3(), message = "arrow not build with S3 support.")
+skip_if_not_available("s3")
 skip_if_not(nzchar(Sys.which("minio")), message = "minio is not installed.")
 
 library(dplyr)
@@ -104,6 +104,24 @@ test_that("S3FileSystem input validation", {
     S3FileSystem$create(external_id = "foo"),
     'Cannot specify "external_id" without providing a role_arn string'
   )
+})
+
+test_that("Confirm s3_bucket works with endpoint_override", {
+  bucket <- s3_bucket(
+    now,
+    access_key = minio_key,
+    secret_key = minio_secret,
+    scheme = "http",
+    endpoint_override = paste0("localhost:", minio_port)
+  )
+
+  expect_r6_class(bucket, "SubTreeFileSystem")
+
+  os <- bucket$OpenOutputStream("bucket-test.csv")
+  write_csv_arrow(example_data, os)
+  os$close()
+  expect_true("bucket-test.csv" %in% bucket$ls())
+  bucket$DeleteFile("bucket-test.csv")
 })
 
 # Cleanup

@@ -24,9 +24,9 @@ import (
 	"reflect"
 	"sync/atomic"
 
-	"github.com/apache/arrow/go/v11/arrow"
-	"github.com/apache/arrow/go/v11/arrow/internal/debug"
-	"github.com/apache/arrow/go/v11/arrow/memory"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/internal/debug"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/goccy/go-json"
 )
 
@@ -173,6 +173,12 @@ func (b *BinaryBuilder) AppendStringValues(v []string, valid []bool) {
 	b.builder.unsafeAppendBoolsToBitmap(valid, len(v))
 }
 
+func (b *BinaryBuilder) UnsafeAppend(v []byte) {
+	b.appendNextOffset()
+	b.values.unsafeAppend(v)
+	b.UnsafeAppendBoolToBitmap(true)
+}
+
 func (b *BinaryBuilder) Value(i int) []byte {
 	start := b.getOffsetVal(i)
 	var end int
@@ -214,6 +220,9 @@ func (b *BinaryBuilder) ReserveData(n int) {
 // additional memory will be allocated. If n is smaller, the allocated memory may be reduced.
 func (b *BinaryBuilder) Resize(n int) {
 	b.offsets.resize((n + 1) * b.offsetByteWidth)
+	if (n * b.offsetByteWidth) < b.offsets.Len() {
+		b.offsets.SetLength(n * b.offsetByteWidth)
+	}
 	b.builder.resize(n, b.init)
 }
 
@@ -280,7 +289,26 @@ func (b *BinaryBuilder) appendNextOffset() {
 	b.appendOffsetVal(numBytes)
 }
 
-func (b *BinaryBuilder) unmarshalOne(dec *json.Decoder) error {
+func (b *BinaryBuilder) AppendValueFromString(s string) error {
+	if s == NullValueStr {
+		b.AppendNull()
+		return nil
+	}
+
+	if b.dtype.IsUtf8() {
+		b.Append([]byte(s))
+		return nil
+	}
+
+	decodedVal, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("could not decode base64 string: %w", err)
+	}
+	b.Append(decodedVal)
+	return nil
+}
+
+func (b *BinaryBuilder) UnmarshalOne(dec *json.Decoder) error {
 	t, err := dec.Token()
 	if err != nil {
 		return err
@@ -307,9 +335,9 @@ func (b *BinaryBuilder) unmarshalOne(dec *json.Decoder) error {
 	return nil
 }
 
-func (b *BinaryBuilder) unmarshal(dec *json.Decoder) error {
+func (b *BinaryBuilder) Unmarshal(dec *json.Decoder) error {
 	for dec.More() {
-		if err := b.unmarshalOne(dec); err != nil {
+		if err := b.UnmarshalOne(dec); err != nil {
 			return err
 		}
 	}
@@ -327,7 +355,7 @@ func (b *BinaryBuilder) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("binary builder must unpack from json array, found %s", delim)
 	}
 
-	return b.unmarshal(dec)
+	return b.Unmarshal(dec)
 }
 
 var (

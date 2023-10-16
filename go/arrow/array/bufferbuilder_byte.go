@@ -16,7 +16,7 @@
 
 package array
 
-import "github.com/apache/arrow/go/v11/arrow/memory"
+import "github.com/apache/arrow/go/v13/arrow/memory"
 
 type byteBufferBuilder struct {
 	bufferBuilder

@@ -30,6 +30,7 @@
 #include "arrow/util/iterator.h"
 #include "arrow/util/mutex.h"
 #include "arrow/util/thread_pool.h"
+#include "arrow/util/tracing.h"
 
 namespace arrow {
 
@@ -93,6 +94,14 @@ class ARROW_EXPORT AsyncTaskScheduler {
     /// tasks based on the total expected RAM usage of the tasks (this is done in the
     /// scanner)
     virtual int cost() const { return 1; }
+    /// The name of the task
+    ///
+    /// This is used for debugging and traceability.  The returned view must remain
+    /// valid for the lifetime of the task.
+    virtual std::string_view name() const = 0;
+
+    /// a span tied to the lifetime of the task, for internal use only
+    tracing::Span span;
   };
 
   /// Add a task to the scheduler
@@ -105,6 +114,10 @@ class ARROW_EXPORT AsyncTaskScheduler {
   /// that want to avoid future task generation to save effort.
   ///
   /// \param task the task to submit
+  ///
+  /// A task's name must remain valid for the duration of the task.  It is used for
+  /// debugging (e.g. when debugging a deadlock to see which tasks still remain) and for
+  /// traceability (the name will be used for spans asigned to the task)
   ///
   /// \return true if the task was submitted or queued, false if the task was ignored
   virtual bool AddTask(std::unique_ptr<Task> task) = 0;
@@ -124,37 +137,73 @@ class ARROW_EXPORT AsyncTaskScheduler {
   ///
   /// \param generator the generator to submit to the scheduler
   /// \param visitor a function which visits each generator future as it completes
+  /// \param name a name which will be used for each submitted task
   template <typename T>
   bool AddAsyncGenerator(std::function<Future<T>()> generator,
-                         std::function<Status(const T&)> visitor);
+                         std::function<Status(const T&)> visitor, std::string_view name);
 
   template <typename Callable>
   struct SimpleTask : public Task {
-    explicit SimpleTask(Callable callable) : callable(std::move(callable)) {}
+    SimpleTask(Callable callable, std::string_view name)
+        : callable(std::move(callable)), name_(name) {}
+    SimpleTask(Callable callable, std::string name)
+        : callable(std::move(callable)), owned_name_(std::move(name)) {
+      name_ = *owned_name_;
+    }
     Result<Future<>> operator()() override { return callable(); }
+    std::string_view name() const override { return name_; }
     Callable callable;
+    std::string_view name_;
+    std::optional<std::string> owned_name_;
   };
 
   /// Add a task with cost 1 to the scheduler
   ///
-  /// \see AddTask for details
+  /// \param callable a "submit" function that should return a future
+  /// \param name a name for the task
+  ///
+  /// `name` must remain valid until the task has been submitted AND the returned
+  /// future completes.  It is used for debugging and tracing.
+  ///
+  /// \see AddTask for more details
   template <typename Callable>
-  bool AddSimpleTask(Callable callable) {
-    return AddTask(std::make_unique<SimpleTask<Callable>>(std::move(callable)));
+  bool AddSimpleTask(Callable callable, std::string_view name) {
+    return AddTask(std::make_unique<SimpleTask<Callable>>(std::move(callable), name));
+  }
+
+  /// Add a task with cost 1 to the scheduler
+  ///
+  /// This is an overload of \see AddSimpleTask that keeps `name` alive
+  /// in the task.
+  template <typename Callable>
+  bool AddSimpleTask(Callable callable, std::string name) {
+    return AddTask(
+        std::make_unique<SimpleTask<Callable>>(std::move(callable), std::move(name)));
   }
 
   /// Construct a scheduler
   ///
   /// \param initial_task The initial task which is responsible for adding
   ///        the first subtasks to the scheduler.
+  /// \param abort_callback A callback that will be triggered immediately after a task
+  ///        fails while other tasks may still be running.  Nothing needs to be done here,
+  ///        when a task fails the scheduler will stop accepting new tasks and eventually
+  ///        return the error.  However, this callback can be used to more quickly end
+  ///        long running tasks that have already been submitted.  Defaults to doing
+  ///        nothing.
   /// \param stop_token An optional stop token that will allow cancellation of the
   ///        scheduler.  This will be checked before each task is submitted and, in the
   ///        event of a cancellation, the scheduler will enter an aborted state. This is
   ///        a graceful cancellation and submitted tasks will still complete.
   /// \return A future that will be completed when the initial task and all subtasks have
   ///         finished.
-  static Future<> Make(FnOnce<Status(AsyncTaskScheduler*)> initial_task,
-                       StopToken stop_token = StopToken::Unstoppable());
+  static Future<> Make(
+      FnOnce<Status(AsyncTaskScheduler*)> initial_task,
+      FnOnce<void(const Status&)> abort_callback = [](const Status&) {},
+      StopToken stop_token = StopToken::Unstoppable());
+
+  /// A span tracking execution of the scheduler's tasks, for internal use only
+  virtual const tracing::Span& span() const = 0;
 };
 
 class ARROW_EXPORT ThrottledAsyncTaskScheduler : public AsyncTaskScheduler {
@@ -327,16 +376,18 @@ ARROW_EXPORT std::unique_ptr<ThrottledAsyncTaskScheduler> MakeThrottledAsyncTask
 // AsyncTaskGroup
 template <typename T>
 bool AsyncTaskScheduler::AddAsyncGenerator(std::function<Future<T>()> generator,
-                                           std::function<Status(const T&)> visitor) {
+                                           std::function<Status(const T&)> visitor,
+                                           std::string_view name) {
   struct State {
     State(std::function<Future<T>()> generator, std::function<Status(const T&)> visitor,
-          std::unique_ptr<AsyncTaskGroup> task_group)
+          std::unique_ptr<AsyncTaskGroup> task_group, std::string_view name)
         : generator(std::move(generator)),
           visitor(std::move(visitor)),
           task_group(std::move(task_group)) {}
     std::function<Future<T>()> generator;
     std::function<Status(const T&)> visitor;
     std::unique_ptr<AsyncTaskGroup> task_group;
+    std::string_view name;
   };
   struct SubmitTask : public Task {
     explicit SubmitTask(std::unique_ptr<State> state_holder)
@@ -387,13 +438,16 @@ bool AsyncTaskScheduler::AddAsyncGenerator(std::function<Future<T>()> generator,
         ARROW_RETURN_NOT_OK(state_holder->visitor(item));
       }
     }
+
+    std::string_view name() const { return state_holder->name; }
+
     std::unique_ptr<State> state_holder;
   };
   std::unique_ptr<AsyncTaskGroup> task_group =
       AsyncTaskGroup::Make(this, [] { return Status::OK(); });
   AsyncTaskGroup* task_group_view = task_group.get();
   std::unique_ptr<State> state_holder = std::make_unique<State>(
-      std::move(generator), std::move(visitor), std::move(task_group));
+      std::move(generator), std::move(visitor), std::move(task_group), name);
   task_group_view->AddTask(std::make_unique<SubmitTask>(std::move(state_holder)));
   return true;
 }

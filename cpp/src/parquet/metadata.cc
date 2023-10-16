@@ -33,7 +33,6 @@
 #include "parquet/exception.h"
 #include "parquet/schema.h"
 #include "parquet/schema_internal.h"
-#include "parquet/statistics.h"
 #include "parquet/thrift_internal.h"
 
 namespace parquet {
@@ -164,7 +163,7 @@ std::unique_ptr<ColumnCryptoMetaData> ColumnCryptoMetaData::Make(
 }
 
 ColumnCryptoMetaData::ColumnCryptoMetaData(const uint8_t* metadata)
-    : impl_(new ColumnCryptoMetaDataImpl(
+    : impl_(std::make_unique<ColumnCryptoMetaDataImpl>(
           reinterpret_cast<const format::ColumnCryptoMetaData*>(metadata))) {}
 
 ColumnCryptoMetaData::~ColumnCryptoMetaData() = default;
@@ -279,6 +278,13 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
 
   const std::vector<PageEncodingStats>& encoding_stats() const { return encoding_stats_; }
 
+  inline std::optional<int64_t> bloom_filter_offset() const {
+    if (column_metadata_->__isset.bloom_filter_offset) {
+      return column_metadata_->bloom_filter_offset;
+    }
+    return std::nullopt;
+  }
+
   inline bool has_dictionary_page() const {
     return column_metadata_->__isset.dictionary_page_offset;
   }
@@ -312,7 +318,7 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
     }
   }
 
-  std::optional<IndexLocation> GetColumIndexLocation() const {
+  std::optional<IndexLocation> GetColumnIndexLocation() const {
     if (column_->__isset.column_index_offset && column_->__isset.column_index_length) {
       return IndexLocation{column_->column_index_offset, column_->column_index_length};
     }
@@ -388,6 +394,10 @@ std::shared_ptr<Statistics> ColumnChunkMetaData::statistics() const {
 
 bool ColumnChunkMetaData::is_stats_set() const { return impl_->is_stats_set(); }
 
+std::optional<int64_t> ColumnChunkMetaData::bloom_filter_offset() const {
+  return impl_->bloom_filter_offset();
+}
+
 bool ColumnChunkMetaData::has_dictionary_page() const {
   return impl_->has_dictionary_page();
 }
@@ -434,8 +444,8 @@ std::unique_ptr<ColumnCryptoMetaData> ColumnChunkMetaData::crypto_metadata() con
   return impl_->crypto_metadata();
 }
 
-std::optional<IndexLocation> ColumnChunkMetaData::GetColumIndexLocation() const {
-  return impl_->GetColumIndexLocation();
+std::optional<IndexLocation> ColumnChunkMetaData::GetColumnIndexLocation() const {
+  return impl_->GetColumnIndexLocation();
 }
 
 std::optional<IndexLocation> ColumnChunkMetaData::GetOffsetIndexLocation() const {
@@ -492,6 +502,18 @@ class RowGroupMetaData::RowGroupMetaDataImpl {
     }
     throw ParquetException("The file only has ", num_columns(),
                            " columns, requested metadata for column: ", i);
+  }
+
+  std::vector<SortingColumn> sorting_columns() const {
+    std::vector<SortingColumn> sorting_columns;
+    if (!row_group_->__isset.sorting_columns) {
+      return sorting_columns;
+    }
+    sorting_columns.resize(row_group_->sorting_columns.size());
+    for (size_t i = 0; i < sorting_columns.size(); ++i) {
+      sorting_columns[i] = FromThrift(row_group_->sorting_columns[i]);
+    }
+    return sorting_columns;
   }
 
  private:
@@ -559,6 +581,10 @@ bool RowGroupMetaData::can_decompress() const {
     }
   }
   return true;
+}
+
+std::vector<SortingColumn> RowGroupMetaData::sorting_columns() const {
+  return impl_->sorting_columns();
 }
 
 // file metadata
@@ -1674,6 +1700,15 @@ class RowGroupMetaDataBuilder::RowGroupMetaDataBuilderImpl {
       total_compressed_size += column_builders_[i]->total_compressed_size();
     }
 
+    const auto& sorting_columns = properties_->sorting_columns();
+    if (!sorting_columns.empty()) {
+      std::vector<format::SortingColumn> thrift_sorting_columns(sorting_columns.size());
+      for (size_t i = 0; i < sorting_columns.size(); ++i) {
+        thrift_sorting_columns[i] = ToThrift(sorting_columns[i]);
+      }
+      row_group_->__set_sorting_columns(std::move(thrift_sorting_columns));
+    }
+
     row_group_->__set_file_offset(file_offset);
     row_group_->__set_total_compressed_size(total_compressed_size);
     row_group_->__set_total_byte_size(total_bytes_written);
@@ -1730,7 +1765,6 @@ void RowGroupMetaDataBuilder::Finish(int64_t total_bytes_written,
 }
 
 // file metadata
-// TODO(PARQUET-595) Support key_value_metadata
 class FileMetaDataBuilder::FileMetaDataBuilderImpl {
  public:
   explicit FileMetaDataBuilderImpl(
@@ -1753,7 +1787,42 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
     return current_row_group_builder_.get();
   }
 
-  std::unique_ptr<FileMetaData> Finish() {
+  void SetPageIndexLocation(const PageIndexLocation& location) {
+    auto set_index_location =
+        [this](size_t row_group_ordinal,
+               const PageIndexLocation::FileIndexLocation& file_index_location,
+               bool column_index) {
+          auto& row_group_metadata = this->row_groups_.at(row_group_ordinal);
+          auto iter = file_index_location.find(row_group_ordinal);
+          if (iter != file_index_location.cend()) {
+            const auto& row_group_index_location = iter->second;
+            for (size_t i = 0; i < row_group_index_location.size(); ++i) {
+              if (i >= row_group_metadata.columns.size()) {
+                throw ParquetException("Cannot find metadata for column ordinal ", i);
+              }
+              auto& column_metadata = row_group_metadata.columns.at(i);
+              const auto& index_location = row_group_index_location.at(i);
+              if (index_location.has_value()) {
+                if (column_index) {
+                  column_metadata.__set_column_index_offset(index_location->offset);
+                  column_metadata.__set_column_index_length(index_location->length);
+                } else {
+                  column_metadata.__set_offset_index_offset(index_location->offset);
+                  column_metadata.__set_offset_index_length(index_location->length);
+                }
+              }
+            }
+          }
+        };
+
+    for (size_t i = 0; i < row_groups_.size(); ++i) {
+      set_index_location(i, location.column_index_location, true);
+      set_index_location(i, location.offset_index_location, false);
+    }
+  }
+
+  std::unique_ptr<FileMetaData> Finish(
+      const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
     int64_t total_rows = 0;
     for (auto row_group : row_groups_) {
       total_rows += row_group.num_rows;
@@ -1761,7 +1830,12 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
     metadata_->__set_num_rows(total_rows);
     metadata_->__set_row_groups(row_groups_);
 
-    if (key_value_metadata_) {
+    if (key_value_metadata_ || key_value_metadata) {
+      if (!key_value_metadata_) {
+        key_value_metadata_ = key_value_metadata;
+      } else if (key_value_metadata) {
+        key_value_metadata_ = key_value_metadata_->Merge(*key_value_metadata);
+      }
       metadata_->key_value_metadata.clear();
       metadata_->key_value_metadata.reserve(key_value_metadata_->size());
       for (int64_t i = 0; i < key_value_metadata_->size(); ++i) {
@@ -1785,7 +1859,7 @@ class FileMetaDataBuilder::FileMetaDataBuilderImpl {
     metadata_->__set_version(file_version);
     metadata_->__set_created_by(properties_->created_by());
 
-    // Users cannot set the `ColumnOrder` since we donot not have user defined sort order
+    // Users cannot set the `ColumnOrder` since we do not have user defined sort order
     // in the spec yet.
     // We always default to `TYPE_DEFINED_ORDER`. We can expose it in
     // the API once we have user defined sort orders in the Parquet format.
@@ -1866,6 +1940,12 @@ std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::Make(
       new FileMetaDataBuilder(schema, std::move(props), std::move(key_value_metadata)));
 }
 
+std::unique_ptr<FileMetaDataBuilder> FileMetaDataBuilder::Make(
+    const SchemaDescriptor* schema, std::shared_ptr<WriterProperties> props) {
+  return std::unique_ptr<FileMetaDataBuilder>(
+      new FileMetaDataBuilder(schema, std::move(props)));
+}
+
 FileMetaDataBuilder::FileMetaDataBuilder(
     const SchemaDescriptor* schema, std::shared_ptr<WriterProperties> props,
     std::shared_ptr<const KeyValueMetadata> key_value_metadata)
@@ -1878,7 +1958,14 @@ RowGroupMetaDataBuilder* FileMetaDataBuilder::AppendRowGroup() {
   return impl_->AppendRowGroup();
 }
 
-std::unique_ptr<FileMetaData> FileMetaDataBuilder::Finish() { return impl_->Finish(); }
+void FileMetaDataBuilder::SetPageIndexLocation(const PageIndexLocation& location) {
+  impl_->SetPageIndexLocation(location);
+}
+
+std::unique_ptr<FileMetaData> FileMetaDataBuilder::Finish(
+    const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
+  return impl_->Finish(key_value_metadata);
+}
 
 std::unique_ptr<FileCryptoMetaData> FileMetaDataBuilder::GetCryptoMetaData() {
   return impl_->BuildFileCryptoMetaData();
