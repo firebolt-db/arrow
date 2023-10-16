@@ -28,14 +28,17 @@
 #include <gtest/gtest-matchers.h>
 #include <gtest/gtest.h>
 
+#include "arrow/acero/asof_join_node.h"
+#include "arrow/acero/exec_plan.h"
+#include "arrow/acero/map_node.h"
+#include "arrow/acero/options.h"
+#include "arrow/acero/util.h"
 #include "arrow/buffer.h"
 #include "arrow/compute/api_scalar.h"
 #include "arrow/compute/api_vector.h"
 #include "arrow/compute/exec.h"
-#include "arrow/compute/exec/exec_plan.h"
-#include "arrow/compute/exec/expression.h"
-#include "arrow/compute/exec/expression_internal.h"
-#include "arrow/compute/exec/options.h"
+#include "arrow/compute/expression.h"
+#include "arrow/compute/expression_internal.h"
 #include "arrow/compute/registry.h"
 #include "arrow/compute/type_fwd.h"
 #include "arrow/dataset/dataset.h"
@@ -50,6 +53,7 @@
 #include "arrow/engine/substrait/extension_types.h"
 #include "arrow/engine/substrait/options.h"
 #include "arrow/engine/substrait/serde.h"
+#include "arrow/engine/substrait/test_util.h"
 #include "arrow/engine/substrait/util.h"
 #include "arrow/filesystem/filesystem.h"
 #include "arrow/filesystem/localfs.h"
@@ -85,66 +89,74 @@ using internal::checked_cast;
 using internal::hash_combine;
 namespace engine {
 
+Status AddPassFactory(
+    const std::string& factory_name,
+    acero::ExecFactoryRegistry* registry = acero::default_exec_factory_registry()) {
+  using acero::ExecNode;
+  using acero::ExecNodeOptions;
+  using acero::ExecPlan;
+  using compute::ExecBatch;
+  struct PassNode : public acero::MapNode {
+    static Result<ExecNode*> Make(ExecPlan* plan, std::vector<ExecNode*> inputs,
+                                  const acero::ExecNodeOptions& options) {
+      RETURN_NOT_OK(ValidateExecNodeInputs(plan, inputs, 1, "PassNode"));
+      return plan->EmplaceNode<PassNode>(plan, inputs, inputs[0]->output_schema());
+    }
+
+    PassNode(ExecPlan* plan, std::vector<ExecNode*> inputs,
+             std::shared_ptr<Schema> output_schema)
+        : MapNode(plan, inputs, output_schema) {}
+
+    const char* kind_name() const override { return "PassNode"; }
+    Result<ExecBatch> ProcessBatch(ExecBatch batch) override { return batch; }
+  };
+  return registry->AddFactory(factory_name, PassNode::Make);
+}
+
+const auto kNullConsumer = std::make_shared<acero::NullSinkNodeConsumer>();
+
 void WriteIpcData(const std::string& path,
                   const std::shared_ptr<fs::FileSystem> file_system,
                   const std::shared_ptr<Table> input) {
-  EXPECT_OK_AND_ASSIGN(auto mmap, file_system->OpenOutputStream(path));
+  EXPECT_OK_AND_ASSIGN(auto out_stream, file_system->OpenOutputStream(path));
   ASSERT_OK_AND_ASSIGN(
       auto file_writer,
-      MakeFileWriter(mmap, input->schema(), ipc::IpcWriteOptions::Defaults()));
-  TableBatchReader reader(input);
-  std::shared_ptr<RecordBatch> batch;
-  while (true) {
-    ASSERT_OK(reader.ReadNext(&batch));
-    if (batch == nullptr) {
-      break;
-    }
-    ASSERT_OK(file_writer->WriteRecordBatch(*batch));
-  }
+      MakeFileWriter(out_stream, input->schema(), ipc::IpcWriteOptions::Defaults()));
+  ASSERT_OK(file_writer->WriteTable(*input));
   ASSERT_OK(file_writer->Close());
 }
 
-Result<std::shared_ptr<Table>> GetTableFromPlan(
-    compute::Declaration& other_declrs, compute::ExecContext& exec_context,
-    const std::shared_ptr<Schema>& output_schema) {
-  ARROW_ASSIGN_OR_RAISE(auto plan, compute::ExecPlan::Make(&exec_context));
+void CheckRoundTripResult(const std::shared_ptr<Table> expected_table,
+                          std::shared_ptr<Buffer>& buf,
+                          const std::vector<int>& include_columns = {},
+                          const ConversionOptions& conversion_options = {},
+                          const compute::SortOptions* sort_options = NULLPTR) {
+  std::shared_ptr<ExtensionIdRegistry> sp_ext_id_reg = MakeExtensionIdRegistry();
+  ExtensionIdRegistry* ext_id_reg = sp_ext_id_reg.get();
+  ExtensionSet ext_set(ext_id_reg);
+  ASSERT_OK_AND_ASSIGN(auto sink_decls, DeserializePlans(
+                                            *buf, [] { return kNullConsumer; },
+                                            ext_id_reg, &ext_set, conversion_options));
+  auto& other_declrs = std::get<acero::Declaration>(sink_decls[0].inputs[0]);
 
-  arrow::AsyncGenerator<std::optional<compute::ExecBatch>> sink_gen;
-  auto sink_node_options = compute::SinkNodeOptions{&sink_gen};
-  auto sink_declaration = compute::Declaration({"sink", sink_node_options, "e"});
-  auto declarations = compute::Declaration::Sequence({other_declrs, sink_declaration});
+  ASSERT_OK_AND_ASSIGN(auto output_table,
+                       acero::DeclarationToTable(other_declrs, /*use_threads=*/false));
 
-  ARROW_ASSIGN_OR_RAISE(auto decl, declarations.AddToPlan(plan.get()));
-
-  RETURN_NOT_OK(decl->Validate());
-
-  std::shared_ptr<arrow::RecordBatchReader> sink_reader = compute::MakeGeneratorReader(
-      output_schema, std::move(sink_gen), exec_context.memory_pool());
-
-  RETURN_NOT_OK(plan->Validate());
-  RETURN_NOT_OK(plan->StartProducing());
-  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Table> table,
-                        arrow::Table::FromRecordBatchReader(sink_reader.get()));
-  RETURN_NOT_OK(plan->finished().status());
-  return table;
+  if (!include_columns.empty()) {
+    ASSERT_OK_AND_ASSIGN(output_table, output_table->SelectColumns(include_columns));
+  }
+  if (sort_options) {
+    ASSERT_OK_AND_ASSIGN(auto sort_indices,
+                         SortIndices(output_table, std::move(*sort_options)));
+    ASSERT_OK_AND_ASSIGN(auto maybe_table,
+                         compute::Take(output_table, std::move(sort_indices),
+                                       compute::TakeOptions::NoBoundsCheck()));
+    output_table = maybe_table.table();
+  }
+  ASSERT_OK_AND_ASSIGN(output_table, output_table->CombineChunks());
+  ASSERT_OK_AND_ASSIGN(auto merged_expected, expected_table->CombineChunks());
+  engine::AssertTablesEqualIgnoringOrder(merged_expected, output_table);
 }
-
-class NullSinkNodeConsumer : public compute::SinkNodeConsumer {
- public:
-  Status Init(const std::shared_ptr<Schema>&, compute::BackpressureControl*,
-              compute::ExecPlan* plan) override {
-    return Status::OK();
-  }
-  Status Consume(compute::ExecBatch exec_batch) override { return Status::OK(); }
-  Future<> Finish() override { return Status::OK(); }
-
- public:
-  static std::shared_ptr<NullSinkNodeConsumer> Make() {
-    return std::make_shared<NullSinkNodeConsumer>();
-  }
-};
-
-const auto kNullConsumer = std::make_shared<NullSinkNodeConsumer>();
 
 const std::shared_ptr<Schema> kBoringSchema = schema({
     field("bool", boolean()),
@@ -176,22 +188,6 @@ const std::shared_ptr<Schema> kBoringSchema = schema({
     field("ts_ns", timestamp(TimeUnit::NANO)),
 });
 
-std::shared_ptr<DataType> StripFieldNames(std::shared_ptr<DataType> type) {
-  if (type->id() == Type::STRUCT) {
-    FieldVector fields(type->num_fields());
-    for (int i = 0; i < type->num_fields(); ++i) {
-      fields[i] = type->field(i)->WithName("");
-    }
-    return struct_(std::move(fields));
-  }
-
-  if (type->id() == Type::LIST) {
-    return list(type->field(0)->WithName(""));
-  }
-
-  return type;
-}
-
 inline compute::Expression UseBoringRefs(const compute::Expression& expr) {
   if (expr.literal()) return expr;
 
@@ -206,38 +202,32 @@ inline compute::Expression UseBoringRefs(const compute::Expression& expr) {
   return compute::Expression{std::move(modified_call)};
 }
 
-void CheckRoundTripResult(const std::shared_ptr<Schema> output_schema,
-                          const std::shared_ptr<Table> expected_table,
-                          compute::ExecContext& exec_context,
-                          std::shared_ptr<Buffer>& buf,
-                          const std::vector<int>& include_columns = {},
-                          const ConversionOptions& conversion_options = {},
-                          const compute::SortOptions* sort_options = NULLPTR) {
+int CountProjectNodeOptionsInDeclarations(const acero::Declaration& input) {
+  int counter = 0;
+  if (input.factory_name == "project") {
+    counter++;
+  }
+  const auto& inputs = input.inputs;
+  for (const auto& in : inputs) {
+    counter += CountProjectNodeOptionsInDeclarations(std::get<acero::Declaration>(in));
+  }
+  return counter;
+}
+/// Validate the number of expected ProjectNodes
+///
+/// Project nodes are sometimes added by emit elements and we may want to
+/// verify that we are not adding too many
+void ValidateNumProjectNodes(int expected_projections, const std::shared_ptr<Buffer>& buf,
+                             const ConversionOptions& conversion_options) {
   std::shared_ptr<ExtensionIdRegistry> sp_ext_id_reg = MakeExtensionIdRegistry();
   ExtensionIdRegistry* ext_id_reg = sp_ext_id_reg.get();
   ExtensionSet ext_set(ext_id_reg);
   ASSERT_OK_AND_ASSIGN(auto sink_decls, DeserializePlans(
                                             *buf, [] { return kNullConsumer; },
                                             ext_id_reg, &ext_set, conversion_options));
-  auto& other_declrs = std::get<compute::Declaration>(sink_decls[0].inputs[0]);
-
-  ASSERT_OK_AND_ASSIGN(auto output_table,
-                       GetTableFromPlan(other_declrs, exec_context, output_schema));
-  if (!include_columns.empty()) {
-    ASSERT_OK_AND_ASSIGN(output_table, output_table->SelectColumns(include_columns));
-  }
-  if (sort_options) {
-    ASSERT_OK_AND_ASSIGN(
-        auto sort_indices,
-        SortIndices(output_table, std::move(*sort_options), &exec_context));
-    ASSERT_OK_AND_ASSIGN(
-        auto maybe_table,
-        compute::Take(output_table, std::move(sort_indices),
-                      compute::TakeOptions::NoBoundsCheck(), &exec_context));
-    output_table = maybe_table.table();
-  }
-  ASSERT_OK_AND_ASSIGN(output_table, output_table->CombineChunks());
-  AssertTablesEqual(*expected_table, *output_table);
+  auto& other_declrs = std::get<acero::Declaration>(sink_decls[0].inputs[0]);
+  int num_projections = CountProjectNodeOptionsInDeclarations(other_declrs);
+  ASSERT_EQ(num_projections, expected_projections);
 }
 
 TEST(Substrait, SupportedTypes) {
@@ -784,6 +774,140 @@ TEST(Substrait, CallExtensionFunction) {
   }
 }
 
+TEST(Substrait, Cast) {
+  ExtensionSet ext_set;
+  ConversionOptions conversion_options;
+
+  ASSERT_OK_AND_ASSIGN(auto buf,
+                       internal::SubstraitFromJSON("Expression", R"({
+  "selection": {
+      "direct_reference": {
+        "struct_field": {
+          "field": 0
+        }
+      },
+    "expression": {
+      "cast": {
+        "type": {
+          "fp64": {
+            "nullability": "NULLABILITY_NULLABLE"
+          }
+        },
+        "input": {
+          "selection": {
+            "direct_reference": {
+              "struct_field": {
+                "field": 0
+              }
+            }
+          }
+        },
+        "failure_behavior": "FAILURE_BEHAVIOR_THROW_EXCEPTION"
+      }
+    }
+  }
+})",
+                                                   /*ignore_unknown_fields=*/false))
+
+  ASSERT_OK_AND_ASSIGN(auto expr, DeserializeExpression(*buf, ext_set));
+
+  ASSERT_TRUE(expr.call());
+
+  ASSERT_THAT(expr.call()->arguments[0].call()->function_name, "cast");
+
+  std::shared_ptr<compute::FunctionOptions> call_opts =
+      expr.call()->arguments[0].call()->options;
+
+  ASSERT_TRUE(!!call_opts);
+  std::shared_ptr<compute::CastOptions> cast_opts =
+      std::dynamic_pointer_cast<compute::CastOptions>(call_opts);
+  ASSERT_TRUE(!!cast_opts);
+  // It is unclear whether a Substrait cast should be safe or not.  In the meantime we are
+  // assuming it is unsafe based on the behavior of many SQL engines.
+  ASSERT_TRUE(cast_opts->allow_int_overflow);
+  ASSERT_TRUE(cast_opts->allow_float_truncate);
+  ASSERT_TRUE(cast_opts->allow_decimal_truncate);
+}
+
+TEST(Substrait, CastRequiresFailureBehavior) {
+  ExtensionSet ext_set;
+  ConversionOptions conversion_options;
+
+  ASSERT_OK_AND_ASSIGN(auto buf,
+                       internal::SubstraitFromJSON("Expression", R"({
+  "selection": {
+      "direct_reference": {
+        "struct_field": {
+          "field": 0
+        }
+      },
+    "expression": {
+      "cast": {
+        "type": {
+          "fp64": {
+            "nullability": "NULLABILITY_NULLABLE"
+          }
+        },
+        "input": {
+          "selection": {
+            "direct_reference": {
+              "struct_field": {
+                "field": 0
+              }
+            }
+          }
+        },
+        "failure_behavior": "FAILURE_BEHAVIOR_UNSPECIFIED"
+      }
+    }
+  }
+})",
+                                                   /*ignore_unknown_fields=*/false))
+
+  EXPECT_THAT(DeserializeExpression(*buf, ext_set, conversion_options),
+              Raises(StatusCode::Invalid, HasSubstr("FailureBehavior unspecified")));
+}
+
+TEST(Substrait, CallCastNonNullableFails) {
+  ExtensionSet ext_set;
+  ConversionOptions conversion_options;
+  conversion_options.strictness = ConversionStrictness::EXACT_ROUNDTRIP;
+
+  ASSERT_OK_AND_ASSIGN(auto buf,
+                       internal::SubstraitFromJSON("Expression", R"({
+  "selection": {
+      "direct_reference": {
+        "struct_field": {
+          "field": 0
+        }
+      },
+    "expression": {
+      "cast": {
+        "type": {
+          "fp64": {
+            "nullability": "NULLABILITY_REQUIRED"
+          }
+        },
+        "input": {
+          "selection": {
+            "direct_reference": {
+              "struct_field": {
+                "field": 0
+              }
+            }
+          }
+        },
+        "failure_behavior": "FAILURE_BEHAVIOR_THROW_EXCEPTION"
+      }
+    }
+  }
+})",
+                                                   /*ignore_unknown_fields=*/false))
+
+  EXPECT_THAT(DeserializeExpression(*buf, ext_set, conversion_options),
+              Raises(StatusCode::Invalid, HasSubstr("must be of nullable type")));
+}
+
 TEST(Substrait, ReadRel) {
   ASSERT_OK_AND_ASSIGN(auto buf,
                        internal::SubstraitFromJSON("Rel", R"({
@@ -841,10 +965,10 @@ TEST(Substrait, ReadRel) {
 
 /// \brief Create a NamedTableProvider that provides `table` regardless of the name
 NamedTableProvider AlwaysProvideSameTable(std::shared_ptr<Table> table) {
-  return [table = std::move(table)](const std::vector<std::string>&) {
-    std::shared_ptr<compute::ExecNodeOptions> options =
-        std::make_shared<compute::TableSourceNodeOptions>(table);
-    return compute::Declaration("table_source", {}, options, "mock_source");
+  return [table = std::move(table)](const std::vector<std::string>&, const Schema&) {
+    std::shared_ptr<acero::ExecNodeOptions> options =
+        std::make_shared<acero::TableSourceNodeOptions>(table);
+    return acero::Declaration("table_source", {}, options, "mock_source");
   };
 }
 
@@ -1021,7 +1145,7 @@ TEST(Substrait, ExtensionSetFromPlanExhaustedFactory) {
     ASSERT_RAISES(
         Invalid,
         DeserializePlans(
-            *buf, []() -> std::shared_ptr<compute::SinkNodeConsumer> { return nullptr; },
+            *buf, []() -> std::shared_ptr<acero::SinkNodeConsumer> { return nullptr; },
             ext_id_reg, &ext_set));
     ASSERT_RAISES(
         Invalid,
@@ -1120,34 +1244,34 @@ TEST(Substrait, DeserializeWithConsumerFactory) {
   ASSERT_OK_AND_ASSIGN(std::string substrait_json, GetSubstraitJSON());
   ASSERT_OK_AND_ASSIGN(auto buf, SerializeJsonPlan(substrait_json));
   ASSERT_OK_AND_ASSIGN(auto declarations,
-                       DeserializePlans(*buf, NullSinkNodeConsumer::Make));
+                       DeserializePlans(*buf, acero::NullSinkNodeConsumer::Make));
   ASSERT_EQ(declarations.size(), 1);
-  compute::Declaration* decl = &declarations[0];
+  acero::Declaration* decl = &declarations[0];
   ASSERT_EQ(decl->factory_name, "consuming_sink");
-  ASSERT_OK_AND_ASSIGN(auto plan, compute::ExecPlan::Make());
+  ASSERT_OK_AND_ASSIGN(auto plan, acero::ExecPlan::Make());
   ASSERT_OK_AND_ASSIGN(auto sink_node, declarations[0].AddToPlan(plan.get()));
   ASSERT_STREQ(sink_node->kind_name(), "ConsumingSinkNode");
   ASSERT_EQ(sink_node->num_inputs(), 1);
   auto& prev_node = sink_node->inputs()[0];
   ASSERT_STREQ(prev_node->kind_name(), "SourceNode");
 
-  ASSERT_OK(plan->StartProducing());
+  plan->StartProducing();
   ASSERT_FINISHES_OK(plan->finished());
 }
 
 TEST(Substrait, DeserializeSinglePlanWithConsumerFactory) {
   ASSERT_OK_AND_ASSIGN(std::string substrait_json, GetSubstraitJSON());
   ASSERT_OK_AND_ASSIGN(auto buf, SerializeJsonPlan(substrait_json));
-  ASSERT_OK_AND_ASSIGN(std::shared_ptr<compute::ExecPlan> plan,
-                       DeserializePlan(*buf, NullSinkNodeConsumer::Make()));
-  ASSERT_EQ(1, plan->sinks().size());
-  compute::ExecNode* sink_node = plan->sinks()[0];
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<acero::ExecPlan> plan,
+                       DeserializePlan(*buf, acero::NullSinkNodeConsumer::Make()));
+  ASSERT_EQ(2, plan->nodes().size());
+  acero::ExecNode* sink_node = plan->nodes()[1];
   ASSERT_STREQ(sink_node->kind_name(), "ConsumingSinkNode");
   ASSERT_EQ(sink_node->num_inputs(), 1);
   auto& prev_node = sink_node->inputs()[0];
   ASSERT_STREQ(prev_node->kind_name(), "SourceNode");
 
-  ASSERT_OK(plan->StartProducing());
+  plan->StartProducing();
   ASSERT_FINISHES_OK(plan->finished());
 }
 
@@ -1173,20 +1297,20 @@ TEST(Substrait, DeserializeWithWriteOptionsFactory) {
   ASSERT_OK_AND_ASSIGN(auto buf, SerializeJsonPlan(substrait_json));
   ASSERT_OK_AND_ASSIGN(auto declarations, DeserializePlans(*buf, write_options_factory));
   ASSERT_EQ(declarations.size(), 1);
-  compute::Declaration* decl = &declarations[0];
+  acero::Declaration* decl = &declarations[0];
   ASSERT_EQ(decl->factory_name, "write");
   ASSERT_EQ(decl->inputs.size(), 1);
-  decl = std::get_if<compute::Declaration>(&decl->inputs[0]);
+  decl = std::get_if<acero::Declaration>(&decl->inputs[0]);
   ASSERT_NE(decl, nullptr);
   ASSERT_EQ(decl->factory_name, "scan");
-  ASSERT_OK_AND_ASSIGN(auto plan, compute::ExecPlan::Make());
+  ASSERT_OK_AND_ASSIGN(auto plan, acero::ExecPlan::Make());
   ASSERT_OK_AND_ASSIGN(auto sink_node, declarations[0].AddToPlan(plan.get()));
   ASSERT_STREQ(sink_node->kind_name(), "ConsumingSinkNode");
   ASSERT_EQ(sink_node->num_inputs(), 1);
   auto& prev_node = sink_node->inputs()[0];
   ASSERT_STREQ(prev_node->kind_name(), "SourceNode");
 
-  ASSERT_OK(plan->StartProducing());
+  plan->StartProducing();
   ASSERT_FINISHES_OK(plan->finished());
 }
 
@@ -1371,16 +1495,16 @@ TEST(Substrait, JoinPlanBasic) {
 
     auto join_decl = sink_decls[0].inputs[0];
 
-    const auto& join_rel = std::get<compute::Declaration>(join_decl);
+    const auto& join_rel = std::get<acero::Declaration>(join_decl);
 
     const auto& join_options =
-        checked_cast<const compute::HashJoinNodeOptions&>(*join_rel.options);
+        checked_cast<const acero::HashJoinNodeOptions&>(*join_rel.options);
 
     EXPECT_EQ(join_rel.factory_name, "hashjoin");
-    EXPECT_EQ(join_options.join_type, compute::JoinType::INNER);
+    EXPECT_EQ(join_options.join_type, acero::JoinType::INNER);
 
-    const auto& left_rel = std::get<compute::Declaration>(join_rel.inputs[0]);
-    const auto& right_rel = std::get<compute::Declaration>(join_rel.inputs[1]);
+    const auto& left_rel = std::get<acero::Declaration>(join_rel.inputs[0]);
+    const auto& right_rel = std::get<acero::Declaration>(join_rel.inputs[1]);
 
     const auto& l_options =
         checked_cast<const dataset::ScanNodeOptions&>(*left_rel.options);
@@ -1394,7 +1518,7 @@ TEST(Substrait, JoinPlanBasic) {
         r_options.dataset->schema(),
         schema({field("X", int32()), field("Y", int32()), field("A", int32())}));
 
-    EXPECT_EQ(join_options.key_cmp[0], compute::JoinKeyCmp::EQ);
+    EXPECT_EQ(join_options.key_cmp[0], acero::JoinKeyCmp::EQ);
   }
 }
 
@@ -1719,7 +1843,6 @@ TEST(Substrait, AggregateBasic) {
             }],
               "sorts": [],
               "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
-              "invocation": "AGGREGATION_INVOCATION_ALL",
               "outputType": {
                 "i64": {}
               }
@@ -1747,10 +1870,10 @@ TEST(Substrait, AggregateBasic) {
                        DeserializePlans(*buf, [] { return kNullConsumer; }));
   auto agg_decl = sink_decls[0].inputs[0];
 
-  const auto& agg_rel = std::get<compute::Declaration>(agg_decl);
+  const auto& agg_rel = std::get<acero::Declaration>(agg_decl);
 
   const auto& agg_options =
-      checked_cast<const compute::AggregateNodeOptions&>(*agg_rel.options);
+      checked_cast<const acero::AggregateNodeOptions&>(*agg_rel.options);
 
   EXPECT_EQ(agg_rel.factory_name, "aggregate");
   EXPECT_EQ(agg_options.aggregates[0].name, "");
@@ -1919,7 +2042,7 @@ TEST(Substrait, AggregateInvalidAggFuncArgs) {
   })",
                                                    /*ignore_unknown_fields=*/false));
 
-  ASSERT_RAISES(NotImplemented, DeserializePlans(*buf, [] { return kNullConsumer; }));
+  ASSERT_RAISES(Invalid, DeserializePlans(*buf, [] { return kNullConsumer; }));
 }
 
 TEST(Substrait, AggregateWithFilter) {
@@ -1981,7 +2104,7 @@ TEST(Substrait, AggregateWithFilter) {
     }],
     "extensionUris": [{
       "extension_uri_anchor": 0,
-      "uri": "https://github.com/apache/arrow/blob/master/format/substrait/extension_types.yaml"
+      "uri": "https://github.com/apache/arrow/blob/main/format/substrait/extension_types.yaml"
     }],
     "extensions": [{
       "extension_function": {
@@ -2055,7 +2178,7 @@ TEST(Substrait, AggregateBadPhase) {
     }],
     "extensionUris": [{
       "extension_uri_anchor": 0,
-      "uri": "https://github.com/apache/arrow/blob/master/format/substrait/extension_types.yaml"
+      "uri": "https://github.com/apache/arrow/blob/main/format/substrait/extension_types.yaml"
     }],
     "extensions": [{
       "extension_function": {
@@ -2127,11 +2250,10 @@ TEST(SubstraitRoundTrip, BasicPlan) {
 
   arrow::AsyncGenerator<std::optional<compute::ExecBatch>> sink_gen;
 
-  auto declarations = compute::Declaration::Sequence(
-      {compute::Declaration(
-           {"scan", dataset::ScanNodeOptions{dataset, scan_options}, "s"}),
-       compute::Declaration({"filter", compute::FilterNodeOptions{filter}, "f"}),
-       compute::Declaration({"sink", compute::SinkNodeOptions{&sink_gen}, "e"})});
+  auto declarations = acero::Declaration::Sequence(
+      {acero::Declaration({"scan", dataset::ScanNodeOptions{dataset, scan_options}, "s"}),
+       acero::Declaration({"filter", acero::FilterNodeOptions{filter}, "f"}),
+       acero::Declaration({"sink", acero::SinkNodeOptions{&sink_gen}, "e"})});
 
   std::shared_ptr<ExtensionIdRegistry> sp_ext_id_reg = MakeExtensionIdRegistry();
   ExtensionIdRegistry* ext_id_reg = sp_ext_id_reg.get();
@@ -2144,10 +2266,9 @@ TEST(SubstraitRoundTrip, BasicPlan) {
       DeserializePlans(
           *serialized_plan, [] { return kNullConsumer; }, ext_id_reg, &ext_set));
   // filter declaration
-  const auto& roundtripped_filter =
-      std::get<compute::Declaration>(sink_decls[0].inputs[0]);
+  const auto& roundtripped_filter = std::get<acero::Declaration>(sink_decls[0].inputs[0]);
   const auto& filter_opts =
-      checked_cast<const compute::FilterNodeOptions&>(*(roundtripped_filter.options));
+      checked_cast<const acero::FilterNodeOptions&>(*(roundtripped_filter.options));
   auto roundtripped_expr = filter_opts.filter_expression;
 
   if (auto* call = roundtripped_expr.call()) {
@@ -2160,7 +2281,7 @@ TEST(SubstraitRoundTrip, BasicPlan) {
   }
   // scan declaration
   const auto& roundtripped_scan =
-      std::get<compute::Declaration>(roundtripped_filter.inputs[0]);
+      std::get<acero::Declaration>(roundtripped_filter.inputs[0]);
   const auto& dataset_opts =
       checked_cast<const dataset::ScanNodeOptions&>(*(roundtripped_scan.options));
   const auto& roundripped_ds = dataset_opts.dataset;
@@ -2236,13 +2357,11 @@ TEST(SubstraitRoundTrip, BasicPlanEndToEnd) {
   auto comp_right_value = compute::field_ref(filter_col_right);
   auto filter = compute::equal(comp_left_value, comp_right_value);
 
-  auto declarations = compute::Declaration::Sequence(
-      {compute::Declaration(
-           {"scan", dataset::ScanNodeOptions{dataset, scan_options}, "s"}),
-       compute::Declaration({"filter", compute::FilterNodeOptions{filter}, "f"})});
+  auto declarations = acero::Declaration::Sequence(
+      {acero::Declaration({"scan", dataset::ScanNodeOptions{dataset, scan_options}, "s"}),
+       acero::Declaration({"filter", acero::FilterNodeOptions{filter}, "f"})});
 
-  ASSERT_OK_AND_ASSIGN(auto expected_table,
-                       GetTableFromPlan(declarations, exec_context, dummy_schema));
+  ASSERT_OK_AND_ASSIGN(auto expected_table, acero::DeclarationToTable(declarations));
 
   std::shared_ptr<ExtensionIdRegistry> sp_ext_id_reg = MakeExtensionIdRegistry();
   ExtensionIdRegistry* ext_id_reg = sp_ext_id_reg.get();
@@ -2255,9 +2374,9 @@ TEST(SubstraitRoundTrip, BasicPlanEndToEnd) {
       DeserializePlans(
           *serialized_plan, [] { return kNullConsumer; }, ext_id_reg, &ext_set));
   // filter declaration
-  auto& roundtripped_filter = std::get<compute::Declaration>(sink_decls[0].inputs[0]);
+  auto& roundtripped_filter = std::get<acero::Declaration>(sink_decls[0].inputs[0]);
   const auto& filter_opts =
-      checked_cast<const compute::FilterNodeOptions&>(*(roundtripped_filter.options));
+      checked_cast<const acero::FilterNodeOptions&>(*(roundtripped_filter.options));
   auto roundtripped_expr = filter_opts.filter_expression;
 
   if (auto* call = roundtripped_expr.call()) {
@@ -2270,7 +2389,7 @@ TEST(SubstraitRoundTrip, BasicPlanEndToEnd) {
   }
   // scan declaration
   const auto& roundtripped_scan =
-      std::get<compute::Declaration>(roundtripped_filter.inputs[0]);
+      std::get<acero::Declaration>(roundtripped_filter.inputs[0]);
   const auto& dataset_opts =
       checked_cast<const dataset::ScanNodeOptions&>(*(roundtripped_scan.options));
   const auto& roundripped_ds = dataset_opts.dataset;
@@ -2289,12 +2408,11 @@ TEST(SubstraitRoundTrip, BasicPlanEndToEnd) {
     EXPECT_TRUE(l_frag->Equals(*r_frag));
   }
   ASSERT_OK_AND_ASSIGN(auto rnd_trp_table,
-                       GetTableFromPlan(roundtripped_filter, exec_context, dummy_schema));
-  EXPECT_TRUE(expected_table->Equals(*rnd_trp_table));
+                       acero::DeclarationToTable(roundtripped_filter));
+  engine::AssertTablesEqualIgnoringOrder(expected_table, rnd_trp_table);
 }
 
 TEST(SubstraitRoundTrip, FilterNamedTable) {
-  compute::ExecContext exec_context;
   arrow::dataset::internal::Initialize();
 
   const std::vector<std::string> table_names{"table", "1"};
@@ -2302,11 +2420,10 @@ TEST(SubstraitRoundTrip, FilterNamedTable) {
       schema({field("A", int32()), field("B", int32()), field("C", int32())});
   auto filter = compute::equal(compute::field_ref("A"), compute::field_ref("B"));
 
-  auto declarations = compute::Declaration::Sequence(
-      {compute::Declaration({"named_table",
-                             compute::NamedTableNodeOptions{table_names, dummy_schema},
-                             "n"}),
-       compute::Declaration({"filter", compute::FilterNodeOptions{filter}, "f"})});
+  auto declarations = acero::Declaration::Sequence(
+      {acero::Declaration(
+           {"named_table", acero::NamedTableNodeOptions{table_names, dummy_schema}, "n"}),
+       acero::Declaration({"filter", acero::FilterNodeOptions{filter}, "f"})});
 
   ExtensionSet ext_set{};
   ASSERT_OK_AND_ASSIGN(auto serialized_plan, SerializePlan(declarations, &ext_set));
@@ -2322,14 +2439,19 @@ TEST(SubstraitRoundTrip, FilterNamedTable) {
   ])"});
 
   NamedTableProvider table_provider =
-      [&input_table, &table_names](
-          const std::vector<std::string>& names) -> Result<compute::Declaration> {
+      [&input_table, &table_names, &dummy_schema](
+          const std::vector<std::string>& names,
+          const Schema& schema) -> Result<acero::Declaration> {
     if (table_names != names) {
       return Status::Invalid("Table name mismatch");
     }
-    std::shared_ptr<compute::ExecNodeOptions> options =
-        std::make_shared<compute::TableSourceNodeOptions>(input_table);
-    return compute::Declaration("table_source", {}, std::move(options), "mock_source");
+    if (!dummy_schema->Equals(schema)) {
+      return Status::Invalid("Table schema mismatch");
+    }
+
+    std::shared_ptr<acero::ExecNodeOptions> options =
+        std::make_shared<acero::TableSourceNodeOptions>(input_table);
+    return acero::Declaration("table_source", {}, std::move(options), "mock_source");
   };
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
@@ -2340,8 +2462,8 @@ TEST(SubstraitRoundTrip, FilterNamedTable) {
     [2, 2, 60]
   ])"});
 
-  CheckRoundTripResult(std::move(dummy_schema), std::move(expected_table), exec_context,
-                       serialized_plan, {}, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), serialized_plan,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, ProjectRel) {
@@ -2455,12 +2577,11 @@ TEST(SubstraitRoundTrip, ProjectRel) {
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
 
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, ProjectRelOnFunctionWithEmit) {
-  compute::ExecContext exec_context;
   auto dummy_schema =
       schema({field("A", int32()), field("B", int32()), field("C", int32())});
 
@@ -2573,13 +2694,196 @@ TEST(SubstraitRoundTrip, ProjectRelOnFunctionWithEmit) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
+}
 
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+TEST(SubstraitRoundTrip, ProjectRelOnFunctionWithAllEmit) {
+  compute::ExecContext exec_context;
+  auto dummy_schema = schema({field("A", int32()), field("B", int32())});
+
+  // creating a dummy dataset using a dummy table
+  auto input_table = TableFromJSON(dummy_schema, {R"([
+      [1, 1],
+      [3, 5],
+      [4, 1],
+      [2, 1],
+      [5, 5],
+      [2, 2]
+  ])"});
+
+  std::string substrait_json = R"({
+  "version": { "major_number": 9999, "minor_number": 9999, "patch_number": 9999 },
+  "relations":[
+      {
+         "rel":{
+            "project":{
+               "common":{
+                  "emit":{
+                     "outputMapping":[
+                        0,
+                        1,
+                        2,
+                        3
+                     ]
+                  }
+               },
+               "expressions":[
+                  {
+                     "scalarFunction":{
+                        "functionReference":0,
+                        "arguments":[
+                           {
+                              "value":{
+                                 "selection":{
+                                    "directReference":{
+                                       "structField":{
+                                          "field":0
+                                       }
+                                    },
+                                    "rootReference":{}
+                                 }
+                              }
+                           },
+                           {
+                              "value":{
+                                 "selection":{
+                                    "directReference":{
+                                       "structField":{
+                                          "field":1
+                                       }
+                                    },
+                                    "rootReference":{}
+                                 }
+                              }
+                           }
+                        ],
+                        "output_type":{
+                           "bool":{}
+                        }
+                     }
+                  }
+               ],
+               "input":{
+                  "project":{
+                     "common":{
+                        "emit":{
+                           "outputMapping":[
+                              0,
+                              1,
+                              2
+                           ]
+                        }
+                     },
+                     "expressions":[
+                        {
+                           "scalarFunction":{
+                              "functionReference":0,
+                              "arguments":[
+                                 {
+                                    "value":{
+                                       "selection":{
+                                          "directReference":{
+                                             "structField":{
+                                                "field":0
+                                             }
+                                          },
+                                          "rootReference":{}
+                                       }
+                                    }
+                                 },
+                                 {
+                                    "value":{
+                                       "selection":{
+                                          "directReference":{
+                                             "structField":{
+                                                "field":1
+                                             }
+                                          },
+                                          "rootReference":{}
+                                       }
+                                    }
+                                 }
+                              ],
+                              "output_type":{
+                                 "bool":{}
+                              }
+                           }
+                        }
+                     ],
+                     "input":{
+                        "read":{
+                           "base_schema":{
+                              "names":[
+                                 "A",
+                                 "B"
+                              ],
+                              "struct":{
+                                 "types":[
+                                    {
+                                       "i32":{}
+                                    },
+                                    {
+                                       "i32":{}
+                                    }
+                                 ]
+                              }
+                           },
+                           "namedTable":{
+                              "names":[
+                                 "TABLE"
+                              ]
+                           }
+                        }
+                     }
+                  }
+               }
+            }
+         }
+      }
+   ],
+  "extension_uris": [
+      {
+        "extension_uri_anchor": 0,
+        "uri": ")" + std::string(kSubstraitComparisonFunctionsUri) +
+                               R"("
+      }
+    ],
+    "extensions": [
+      {"extension_function": {
+        "extension_uri_reference": 0,
+        "function_anchor": 0,
+        "name": "equal"
+      }}
+    ]
+  })";
+
+  ASSERT_OK_AND_ASSIGN(auto buf,
+                       internal::SubstraitFromJSON("Plan", substrait_json,
+                                                   /*ignore_unknown_fields=*/false));
+  auto output_schema = schema({field("A", int32()), field("B", int32()),
+                               field("eq1", boolean()), field("eq2", boolean())});
+  auto expected_table = TableFromJSON(output_schema, {R"([
+      [1, 1, true, true],
+      [3, 5, false, false],
+      [4, 1, false, false],
+      [2, 1, false, false],
+      [5, 5, true, true],
+      [2, 2, true, true]
+  ])"});
+  NamedTableProvider table_provider = AlwaysProvideSameTable(std::move(input_table));
+
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  ValidateNumProjectNodes(2, buf, conversion_options);
+
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, ReadRelWithEmit) {
-  compute::ExecContext exec_context;
   auto dummy_schema =
       schema({field("A", int32()), field("B", int32()), field("C", int32())});
 
@@ -2632,13 +2936,12 @@ TEST(SubstraitRoundTrip, ReadRelWithEmit) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, FilterRelWithEmit) {
-  compute::ExecContext exec_context;
   auto dummy_schema = schema({field("A", int32()), field("B", int32()),
                               field("C", int32()), field("D", int32())});
 
@@ -2750,13 +3053,12 @@ TEST(SubstraitRoundTrip, FilterRelWithEmit) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, JoinRel) {
-  compute::ExecContext exec_context;
   auto left_schema = schema({field("A", int32()), field("B", int32())});
 
   auto right_schema = schema({field("X", int32()), field("Y", int32())});
@@ -2883,7 +3185,7 @@ TEST(SubstraitRoundTrip, JoinRel) {
   ])"});
 
   NamedTableProvider table_provider =
-      [left_table, right_table](const std::vector<std::string>& names) {
+      [left_table, right_table](const std::vector<std::string>& names, const Schema&) {
         std::shared_ptr<Table> output_table;
         for (const auto& name : names) {
           if (name == "left") {
@@ -2893,20 +3195,19 @@ TEST(SubstraitRoundTrip, JoinRel) {
             output_table = right_table;
           }
         }
-        std::shared_ptr<compute::ExecNodeOptions> options =
-            std::make_shared<compute::TableSourceNodeOptions>(std::move(output_table));
-        return compute::Declaration("table_source", {}, options, "mock_source");
+        std::shared_ptr<acero::ExecNodeOptions> options =
+            std::make_shared<acero::TableSourceNodeOptions>(std::move(output_table));
+        return acero::Declaration("table_source", {}, options, "mock_source");
       };
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
 
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, JoinRelWithEmit) {
-  compute::ExecContext exec_context;
   auto left_schema = schema({field("A", int32()), field("B", int32())});
 
   auto right_schema = schema({field("X", int32()), field("Y", int32())});
@@ -3035,7 +3336,7 @@ TEST(SubstraitRoundTrip, JoinRelWithEmit) {
   ])"});
 
   NamedTableProvider table_provider =
-      [left_table, right_table](const std::vector<std::string>& names) {
+      [left_table, right_table](const std::vector<std::string>& names, const Schema&) {
         std::shared_ptr<Table> output_table;
         for (const auto& name : names) {
           if (name == "left") {
@@ -3045,20 +3346,19 @@ TEST(SubstraitRoundTrip, JoinRelWithEmit) {
             output_table = right_table;
           }
         }
-        std::shared_ptr<compute::ExecNodeOptions> options =
-            std::make_shared<compute::TableSourceNodeOptions>(std::move(output_table));
-        return compute::Declaration("table_source", {}, options, "mock_source");
+        std::shared_ptr<acero::ExecNodeOptions> options =
+            std::make_shared<acero::TableSourceNodeOptions>(std::move(output_table));
+        return acero::Declaration("table_source", {}, options, "mock_source");
       };
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, AggregateRel) {
-  compute::ExecContext exec_context;
   auto dummy_schema =
       schema({field("A", int32()), field("B", int32()), field("C", int32())});
 
@@ -3149,12 +3449,12 @@ TEST(SubstraitRoundTrip, AggregateRel) {
   ASSERT_OK_AND_ASSIGN(auto buf,
                        internal::SubstraitFromJSON("Plan", substrait_json,
                                                    /*ignore_unknown_fields=*/false));
-  auto output_schema = schema({field("aggregates", int64()), field("keys", int32())});
+  auto output_schema = schema({field("keys", int32()), field("aggregates", int64())});
   auto expected_table = TableFromJSON(output_schema, {R"([
-      [80, 10],
-      [90, 20],
-      [60, 30],
-      [60, 40]
+      [10, 80],
+      [20, 90],
+      [30, 60],
+      [40, 60]
   ])"});
 
   NamedTableProvider table_provider = AlwaysProvideSameTable(std::move(input_table));
@@ -3162,12 +3462,123 @@ TEST(SubstraitRoundTrip, AggregateRel) {
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
 
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
+}
+
+TEST(SubstraitRoundTrip, AggregateRelOptions) {
+  auto dummy_schema =
+      schema({field("A", int32()), field("B", int32()), field("C", int32())});
+
+  // creating a dummy dataset using a dummy table
+  auto input_table = TableFromJSON(dummy_schema, {R"([
+      [10, 1, 10],
+      [20, 2, 10],
+      [30, 3, 20],
+      [30, 1, 20],
+      [20, 2, 30],
+      [10, 3, 30]
+  ])"});
+
+  std::string substrait_json = R"({
+    "version": { "major_number": 9999, "minor_number": 9999, "patch_number": 9999 },
+    "relations": [{
+      "rel": {
+        "aggregate": {
+          "input": {
+            "read": {
+              "base_schema": {
+                "names": ["A", "B", "C"],
+                "struct": {
+                  "types": [{
+                    "i32": {}
+                  }, {
+                    "i32": {}
+                  }, {
+                    "i32": {}
+                  }]
+                }
+              },
+              "namedTable" : {
+                "names": ["A"]
+              }
+            }
+          },
+          "groupings": [{
+            "groupingExpressions": [{
+              "selection": {
+                "directReference": {
+                  "structField": {
+                    "field": 0
+                  }
+                }
+              }
+            }]
+          }],
+          "measures": [{
+            "measure": {
+              "functionReference": 0,
+              "arguments": [{
+                "value": {
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 2
+                      }
+                    }
+                  }
+                }
+            }],
+              "options": [{
+                "name": "distribution",
+                "preference": [
+                  "POPULATION"
+                ]
+              }],
+              "sorts": [],
+              "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+              "invocation": "AGGREGATION_INVOCATION_ALL",
+              "outputType": {
+                "i64": {}
+              }
+            }
+          }]
+        }
+      }
+    }],
+    "extensionUris": [{
+      "extension_uri_anchor": 0,
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
+    }],
+    "extensions": [{
+      "extension_function": {
+        "extension_uri_reference": 0,
+        "function_anchor": 0,
+        "name": "variance"
+      }
+    }],
+  })";
+
+  ASSERT_OK_AND_ASSIGN(auto buf,
+                       internal::SubstraitFromJSON("Plan", substrait_json,
+                                                   /*ignore_unknown_fields=*/false));
+  auto output_schema = schema({field("keys", int32()), field("aggregates", float64())});
+  auto expected_table = TableFromJSON(output_schema, {R"([
+      [10, 200],
+      [20, 200],
+      [30, 0]
+  ])"});
+
+  NamedTableProvider table_provider = AlwaysProvideSameTable(std::move(input_table));
+
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(SubstraitRoundTrip, AggregateRelEmit) {
-  compute::ExecContext exec_context;
   auto dummy_schema =
       schema({field("A", int32()), field("B", int32()), field("C", int32())});
 
@@ -3190,7 +3601,7 @@ TEST(SubstraitRoundTrip, AggregateRelEmit) {
         "aggregate": {
           "common": {
           "emit": {
-            "outputMapping": [0]
+            "outputMapping": [1]
           }
         },
           "input": {
@@ -3276,9 +3687,9 @@ TEST(SubstraitRoundTrip, AggregateRelEmit) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(Substrait, IsthmusPlan) {
@@ -3379,14 +3790,24 @@ TEST(Substrait, IsthmusPlan) {
   ASSERT_OK_AND_ASSIGN(auto buf,
                        internal::SubstraitFromJSON("Plan", substrait_json,
                                                    /*ignore_unknown_fields=*/false));
-
+  ValidateNumProjectNodes(1, buf, conversion_options);
   auto expected_table = TableFromJSON(test_schema, {"[[2], [3], [6]]"});
-  CheckRoundTripResult(std::move(test_schema), std::move(expected_table),
-                       *compute::default_exec_context(), buf, {}, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
+}
+
+NamedTableProvider ProvideMadeTable(
+    std::function<Result<std::shared_ptr<Table>>(const std::vector<std::string>&)> make) {
+  return [make](const std::vector<std::string>& names,
+                const Schema&) -> Result<acero::Declaration> {
+    ARROW_ASSIGN_OR_RAISE(auto table, make(names));
+    std::shared_ptr<acero::ExecNodeOptions> options =
+        std::make_shared<acero::TableSourceNodeOptions>(table);
+    return acero::Declaration("table_source", {}, options, "mock_source");
+  };
 }
 
 TEST(Substrait, ProjectWithMultiFieldExpressions) {
-  compute::ExecContext exec_context;
   auto dummy_schema =
       schema({field("A", int32()), field("B", int32()), field("C", int32())});
 
@@ -3516,7 +3937,7 @@ TEST(Substrait, ProjectWithMultiFieldExpressions) {
             }]
           }
         },
-        "names": ["A", "B", "C", "D"]
+        "names": ["A", "B", "C"]
       }
     }]
   })";
@@ -3534,13 +3955,12 @@ TEST(Substrait, ProjectWithMultiFieldExpressions) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(Substrait, NestedProjectWithMultiFieldExpressions) {
-  compute::ExecContext exec_context;
   auto dummy_schema = schema({field("A", int32())});
 
   // creating a dummy dataset using a dummy table
@@ -3610,7 +4030,7 @@ TEST(Substrait, NestedProjectWithMultiFieldExpressions) {
 
   ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
 
-  auto output_schema = schema({field("A", float64()), field("B", float64())});
+  auto output_schema = schema({field("A", float32()), field("B", float32())});
   auto expected_table = TableFromJSON(output_schema, {R"([
       [20, 20],
       [30, 30],
@@ -3621,13 +4041,12 @@ TEST(Substrait, NestedProjectWithMultiFieldExpressions) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(2, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(Substrait, NestedEmitProjectWithMultiFieldExpressions) {
-  compute::ExecContext exec_context;
   auto dummy_schema = schema({field("A", int32())});
 
   // creating a dummy dataset using a dummy table
@@ -3709,16 +4128,15 @@ TEST(Substrait, NestedEmitProjectWithMultiFieldExpressions) {
 
   ConversionOptions conversion_options;
   conversion_options.named_table_provider = std::move(table_provider);
-
-  CheckRoundTripResult(std::move(output_schema), std::move(expected_table), exec_context,
-                       buf, {}, conversion_options);
+  ValidateNumProjectNodes(2, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
 }
 
 TEST(Substrait, ReadRelWithGlobFiles) {
 #ifdef _WIN32
-  GTEST_SKIP() << "ARROW-16392: Substrait File URI not supported for Windows";
+  GTEST_SKIP() << "GH-33861: Substrait Glob Files URI not supported for Windows";
 #endif
-  compute::ExecContext exec_context;
   arrow::dataset::internal::Initialize();
 
   auto dummy_schema =
@@ -3804,10 +4222,1622 @@ TEST(Substrait, ReadRelWithGlobFiles) {
       }
     }]
   })"));
-
+  // To avoid unnecessar metadata columns being included in the final result
+  std::vector<int> include_columns = {0, 1, 2};
   compute::SortOptions options({compute::SortKey("A", compute::SortOrder::Ascending)});
-  CheckRoundTripResult(std::move(dummy_schema), std::move(expected_table), exec_context,
-                       buf, {}, {}, &options);
+  CheckRoundTripResult(std::move(expected_table), buf, std::move(include_columns),
+                       /*conversion_options=*/{}, &options);
+}
+
+TEST(Substrait, RootRelationOutputNames) {
+  auto dummy_schema =
+      schema({field("A", int32()), field("B", int32()), field("C", int32())});
+
+  // creating a dummy dataset using a dummy table
+  const std::vector<std::string> str_data_vec = {
+      R"([
+      [10, 1, 80],
+      [20, 2, 70],
+      [30, 3, 30]
+  ])"};
+  auto input_table = TableFromJSON(dummy_schema, str_data_vec);
+
+  const std::string substrait_json = R"({
+    "relations": [{
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [3, 4, 5]
+              }
+            },
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {
+                  }
+                },
+                "baseSchema": {
+                  "names": ["A", "B", "C"],
+                  "struct": {
+                    "types": [{
+                      "i32": {
+                        "typeVariationReference": 0,
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }, {
+                      "i32": {
+                        "typeVariationReference": 0,
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }, {
+                      "i32": {
+                        "typeVariationReference": 0,
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }],
+                    "typeVariationReference": 0,
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": ["SIMPLEDATA"]
+                }
+              }
+            },
+            "expressions": [{
+              "selection": {
+                "directReference": {
+                  "structField": {
+                    "field": 0
+                  }
+                },
+                "rootReference": {
+                }
+              }
+            }, {
+              "selection": {
+                "directReference": {
+                  "structField": {
+                    "field": 1
+                  }
+                },
+                "rootReference": {
+                }
+              }
+            }, {
+              "selection": {
+                "directReference": {
+                  "structField": {
+                    "field": 2
+                  }
+                },
+                "rootReference": {
+                }
+              }
+            }]
+          }
+        },
+        "names": ["X", "Y", "Z"]
+      }
+    }]
+  })";
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+  auto output_schema =
+      schema({field("X", int32()), field("Y", int32()), field("Z", int32())});
+  auto expected_table = TableFromJSON(output_schema, str_data_vec);
+
+  NamedTableProvider table_provider = AlwaysProvideSameTable(std::move(input_table));
+
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  CheckRoundTripResult(std::move(expected_table), buf,
+                       /*include_columns=*/{}, conversion_options);
+}
+
+TEST(Substrait, SetRelationBasic) {
+  auto dummy_schema =
+      schema({field("A", int32()), field("B", int32()), field("C", int32())});
+
+  // creating a dummy dataset using a dummy table
+  auto table1 = TableFromJSON(dummy_schema, {R"([
+      [10, 1, 80],
+      [20, 2, 70],
+      [30, 3, 30],
+      [40, 4, 20],
+      [50, 6, 20],
+      [200, 7, 30]
+  ])"});
+
+  auto table2 = TableFromJSON(dummy_schema, {R"([
+      [70, 1, 82],
+      [80, 2, 72],
+      [90, 3, 32],
+      [100, 4, 22],
+      [110, 5, 42],
+      [111, 6, 22],
+      [112, 7, 32]
+  ])"});
+
+  NamedTableProvider table_provider =
+      [table1, table2](const std::vector<std::string>& names, const Schema&) {
+        std::shared_ptr<Table> output_table;
+        for (const auto& name : names) {
+          if (name == "T1") {
+            output_table = table1;
+          }
+          if (name == "T2") {
+            output_table = table2;
+          }
+        }
+        std::shared_ptr<acero::ExecNodeOptions> options =
+            std::make_shared<acero::TableSourceNodeOptions>(std::move(output_table));
+        return acero::Declaration("table_source", {}, options, "mock_source");
+      };
+
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  std::string substrait_json = R"({
+    "relations": [{
+      "root": {
+        "input": {
+          "set": {
+            "inputs": [{
+              "read": {
+                "baseSchema": {
+                  "names": ["FOO"],
+                  "struct": {
+                    "types": [{
+                      "i32": {
+                        "typeVariationReference": 0,
+                        "nullability": "NULLABILITY_NULLABLE"
+                      }
+                    }],
+                    "typeVariationReference": 0,
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": ["T1"]
+                }
+              }
+            }, {
+              "read": {
+                "baseSchema": {
+                  "names": ["BAR"],
+                  "struct": {
+                    "types": [{
+                      "i32": {
+                        "typeVariationReference": 0,
+                        "nullability": "NULLABILITY_NULLABLE"
+                      }
+                    }],
+                    "typeVariationReference": 0,
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": ["T2"]
+                }
+              }
+            }],
+            "op": "SET_OP_UNION_ALL"
+          }
+        },
+        "names": ["FOO"]
+      }
+    }]
+  })";
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+
+  auto expected_table = TableFromJSON(dummy_schema, {R"([
+      [10, 1, 80],
+      [20, 2, 70],
+      [30, 3, 30],
+      [40, 4, 20],
+      [50, 6, 20],
+      [70, 1, 82],
+      [80, 2, 72],
+      [90, 3, 32],
+      [100, 4, 22],
+      [110, 5, 42],
+      [111, 6, 22],
+      [112, 7, 32],
+      [200, 7, 30]
+  ])"});
+
+  compute::SortOptions sort_options(
+      {compute::SortKey("A", compute::SortOrder::Ascending)});
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options,
+                       &sort_options);
+}
+
+TEST(Substrait, PlanWithAsOfJoinExtension) {
+  // This demos an extension relation
+  std::string substrait_json = R"({
+    "extensionUris": [],
+    "extensions": [],
+    "relations": [{
+      "root": {
+        "input": {
+          "extension_multi": {
+            "common": {
+              "emit": {
+                "outputMapping": [0, 1, 2, 3]
+              }
+            },
+            "inputs": [
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value1"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T1"]
+                  }
+                }
+              },
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value2"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T2"]
+                  }
+                }
+              }
+            ],
+            "detail": {
+              "@type": "/arrow.substrait_ext.AsOfJoinRel",
+              "keys" : [
+                {
+                  "on": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0,
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  "by": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1,
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+		},
+                {
+                  "on": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0,
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  "by": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1,
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+		}
+	      ],
+              "tolerance": -1000
+            }
+          }
+        },
+        "names": ["time", "key", "value1", "value2"]
+      }
+    }],
+    "expectedTypeUrls": []
+  })";
+
+  std::vector<std::shared_ptr<Schema>> input_schema = {
+      schema({field("time", int32()), field("key", int32()), field("value1", float64())}),
+      schema(
+          {field("time", int32()), field("key", int32()), field("value2", float64())})};
+  NamedTableProvider table_provider = ProvideMadeTable(
+      [&input_schema](
+          const std::vector<std::string>& names) -> Result<std::shared_ptr<Table>> {
+        if (names.size() != 1) {
+          return Status::Invalid("Multiple test table names");
+        }
+        if (names[0] == "T1") {
+          return TableFromJSON(input_schema[0],
+                               {"[[2, 1, 1.1], [4, 1, 2.1], [6, 2, 3.1]]"});
+        }
+        if (names[0] == "T2") {
+          return TableFromJSON(input_schema[1],
+                               {"[[1, 1, 1.2], [3, 2, 2.2], [5, 2, 3.2]]"});
+        }
+        return Status::Invalid("Unknown test table name ", names[0]);
+      });
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+  ValidateNumProjectNodes(1, buf, conversion_options);
+  ASSERT_OK_AND_ASSIGN(
+      auto out_schema,
+      acero::asofjoin::MakeOutputSchema(
+          input_schema, {{FieldRef(0), {FieldRef(1)}}, {FieldRef(0), {FieldRef(1)}}}));
+  auto expected_table = TableFromJSON(
+      out_schema, {"[[2, 1, 1.1, 1.2], [4, 1, 2.1, 1.2], [6, 2, 3.1, 3.2]]"});
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
+}
+
+TEST(Substrait, CompoundEmitFilterless) {
+  compute::ExecContext exec_context;
+  auto left_schema =
+      schema({field("A", int32()), field("B", int32()), field("C", int32()),
+              field("D", int32()), field("E", int32())});
+
+  auto right_schema =
+      schema({field("X", int32()), field("Y", int32()), field("W", int32()),
+              field("V", int32()), field("Z", int32())});
+
+  // creating a dummy dataset using a dummy table
+  auto left_table = TableFromJSON(left_schema, {R"([
+      [10, 1, 21, 32, 43],
+      [20, 2, 21, 32, 43],
+      [30, 3, 21, 32, 43],
+      [80, 2, 21, 52, 45],
+      [35, 31, 25, 36, 47]
+  ])"});
+
+  auto right_table = TableFromJSON(right_schema, {R"([
+      [10, 11, 25, 36, 47],
+      [80, 21, 25, 32, 40],
+      [32, 31, 25, 36, 42],
+      [30, 11, 25, 38, 44],
+      [33, 21, 24, 32, 41]
+  ])"});
+
+  std::string substrait_json = R"({
+  "version": { "major_number": 9999, "minor_number": 9999, "patch_number": 9999 },
+  "relations": [{
+    "rel": {
+      "join": {
+        "common": {
+          "emit": {
+            "outputMapping": [0, 2, 3, 4, 6, 7]
+          }
+        },
+        "left": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [0, 1, 2, 5]
+              }
+            },
+            "expressions": [{
+              "scalarFunction": {
+                "functionReference": 32,
+                "arguments": [
+                  {
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }, {
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 2
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }
+                ],
+                "output_type": {
+                  "bool": {}
+                }
+              }
+            },
+            ],
+            "input" : {
+              "read": {
+                "base_schema": {
+                  "names": ["A", "B", "C", "D", "E"],
+                    "struct": {
+                    "types": [{
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }]
+                  }
+                },
+                "namedTable": {
+                  "names": ["left"]
+                }
+              }
+            }
+          }
+        },
+        "right": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [0, 1, 2, 5]
+              }
+            },
+            "expressions": [{
+              "scalarFunction": {
+                "functionReference": 32,
+                "arguments": [
+                  {
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }, {
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 2
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }
+                ],
+                "output_type": {
+                  "bool": {}
+                }
+              }
+            },
+            ],
+            "input" : {
+              "read": {
+                "base_schema": {
+                  "names": ["X", "Y", "W", "V", "Z"],
+                    "struct": {
+                    "types": [{
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }, {
+                      "i32": {}
+                    }]
+                  }
+                },
+                "namedTable": {
+                  "names": ["right"]
+                }
+              }
+            }
+          }
+        },
+        "expression": {
+          "scalarFunction": {
+            "functionReference": 14,
+            "arguments": [{
+              "value": {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 0
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }
+            }, {
+              "value": {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 4
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }
+            }],
+            "output_type": {
+              "bool": {}
+            },
+            "overflow" : {
+              "ERROR": {}
+            }
+          }
+        },
+        "type": "JOIN_TYPE_INNER"
+      }
+    }
+  }],
+  "extension_uris": [
+      {
+        "extension_uri_anchor": 42,
+        "uri": ")" + std::string(kSubstraitComparisonFunctionsUri) +
+                               R"("
+      },
+      {
+        "extension_uri_anchor": 72,
+        "uri": ")" + std::string(kSubstraitArithmeticFunctionsUri) +
+                               R"("
+      }
+    ],
+    "extensions": [
+      {
+        "extension_function": {
+          "extension_uri_reference": 42,
+          "function_anchor": 14,
+          "name": "equal"
+        }
+      },
+      {
+        "extension_function": {
+          "extension_uri_reference": 72,
+          "function_anchor": 32,
+          "name": "add"
+        }
+      }
+    ]
+  })";
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+  auto output_schema = schema({
+      field("A", int32()),
+      field("E", int32()),
+      field("B+C", int32()),
+      field("X", int32()),
+      field("Z", int32()),
+      field("Y+W", int32()),
+  });
+
+  auto expected_table = TableFromJSON(std::move(output_schema), {R"([
+      [10, 21, 22, 10, 25, 36],
+      [30, 21, 24, 30, 25, 36],
+      [80, 21, 23, 80, 25, 46]
+  ])"});
+
+  NamedTableProvider table_provider =
+      [left_table, right_table](const std::vector<std::string>& names, const Schema&) {
+        std::shared_ptr<Table> output_table;
+        for (const auto& name : names) {
+          if (name == "left") {
+            output_table = left_table;
+          }
+          if (name == "right") {
+            output_table = right_table;
+          }
+        }
+        std::shared_ptr<acero::ExecNodeOptions> options =
+            std::make_shared<acero::TableSourceNodeOptions>(std::move(output_table));
+        return acero::Declaration("table_source", {}, options, "mock_source");
+      };
+
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
+}
+
+TEST(Substrait, CompoundEmitWithFilter) {
+#ifdef _WIN32
+  GTEST_SKIP() << "ARROW-16392: Substrait File URI not supported for Windows";
+#endif
+  compute::ExecContext exec_context;
+  auto left_schema =
+      schema({field("A", int32()), field("B", int32()), field("C", int32()),
+              field("D", int32()), field("E", int32())});
+
+  auto right_schema =
+      schema({field("X", int32()), field("Y", int32()), field("W", int32()),
+              field("V", int32()), field("Z", int32())});
+
+  // creating a dummy dataset using a dummy table
+  auto left_table = TableFromJSON(left_schema, {R"([
+      [10, 1, 20, 32, 42],
+      [20, 2, 10, 32, 41],
+      [30, 3, 45, 32, 40],
+      [80, 2, 80, 52, 25],
+      [35, 31, 25, 36, 47]
+  ])"});
+
+  auto right_table = TableFromJSON(right_schema, {R"([
+      [10, 11, 5, 36, 47],
+      [80, 21, 39, 32, 40],
+      [32, 31, 26, 36, 42],
+      [30, 11, 12, 38, 44],
+      [33, 21, 11, 32, 41]
+  ])"});
+
+  std::string substrait_json = R"({
+  "relations": [{
+    "rel": {
+      "filter": {
+        "common": {
+          "emit": {
+            "outputMapping": [0, 2, 7]
+          }
+        },
+        "condition": {
+          "scalarFunction": {
+            "functionReference": 25,
+            "arguments": [{
+              "value": {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 1
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }
+            }, {
+              "value": {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 2
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }
+            }],
+            "output_type": {
+              "bool": {}
+            }
+          }
+        },
+        "input" : {
+          "join": {
+            "common": {
+              "emit": {
+                "outputMapping": [0, 2, 3, 4, 6, 7, 8, 9]
+              }
+            },
+            "left": {
+              "project": {
+                "common": {
+                  "emit": {
+                    "outputMapping": [0, 1, 2, 4, 5]
+                  }
+                },
+                "expressions": [{
+                  "scalarFunction": {
+                    "functionReference": 32,
+                    "arguments": [
+                      {
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 1
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }, {
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 2
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "output_type": {
+                      "bool": {}
+                    }
+                  }
+                },
+                ],
+                "input" : {
+                  "read": {
+                    "base_schema": {
+                      "names": ["A", "B", "C", "D", "E"],
+                        "struct": {
+                        "types": [{
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }]
+                      }
+                    },
+                    "namedTable": {
+                      "names": ["left"]
+                    }
+                  }
+                }
+              }
+            },
+            "right": {
+              "project": {
+                "common": {
+                  "emit": {
+                    "outputMapping": [0, 1, 2, 4, 5]
+                  }
+                },
+                "expressions": [{
+                  "scalarFunction": {
+                    "functionReference": 32,
+                    "arguments": [
+                      {
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 1
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }, {
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 2
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "output_type": {
+                      "bool": {}
+                    }
+                  }
+                },
+                ],
+                "input" : {
+                  "read": {
+                    "base_schema": {
+                      "names": ["X", "Y", "W", "V", "Z"],
+                        "struct": {
+                        "types": [{
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }, {
+                          "i32": {}
+                        }]
+                      }
+                    },
+                    "namedTable": {
+                      "names": ["right"]
+                    }
+                  }
+                }
+              }
+            },
+            "expression": {
+              "scalarFunction": {
+                "functionReference": 14,
+                "arguments": [{
+                  "value": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }
+                }, {
+                  "value": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 5
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }
+                }],
+                "output_type": {
+                  "bool": {}
+                },
+                "overflow" : {
+                  "ERROR": {}
+                }
+              }
+            },
+            "type": "JOIN_TYPE_INNER"
+          }
+        }
+      }
+    }
+  }],
+  "extension_uris": [
+      {
+        "extension_uri_anchor": 42,
+        "uri": ")" + std::string(kSubstraitComparisonFunctionsUri) +
+                               R"("
+      },
+      {
+        "extension_uri_anchor": 72,
+        "uri": ")" + std::string(kSubstraitArithmeticFunctionsUri) +
+                               R"("
+      }
+    ],
+    "extensions": [
+      {
+        "extension_function": {
+          "extension_uri_reference": 42,
+          "function_anchor": 14,
+          "name": "equal"
+        }
+      },
+      {
+        "extension_function": {
+          "extension_uri_reference": 42,
+          "function_anchor": 25,
+          "name": "lt"
+        }
+      },
+      {
+        "extension_function": {
+          "extension_uri_reference": 72,
+          "function_anchor": 32,
+          "name": "add"
+        }
+      }
+    ]
+  })";
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+  auto output_schema = schema({
+      field("A", int32()),
+      field("E", int32()),
+      field("Y+W", int32()),
+  });
+
+  auto expected_table = TableFromJSON(std::move(output_schema), {R"([
+      [10, 42, 16]
+  ])"});
+
+  NamedTableProvider table_provider = [left_table, right_table](
+                                          const std::vector<std::string>& names,
+                                          const Schema&) -> Result<acero::Declaration> {
+    std::shared_ptr<Table> output_table;
+    for (const auto& name : names) {
+      if (name == "left") {
+        output_table = left_table;
+      }
+      if (name == "right") {
+        output_table = right_table;
+      }
+    }
+    if (!output_table) {
+      return Status::Invalid("NamedTableProvider couldn't set the table");
+    }
+    std::shared_ptr<acero::ExecNodeOptions> options =
+        std::make_shared<acero::TableSourceNodeOptions>(std::move(output_table));
+    return acero::Declaration("table_source", {}, options, "mock_source");
+  };
+
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
+}
+
+TEST(Substrait, PlanWithExtension) {
+  // This demos an extension relation
+  std::string substrait_json = R"({
+    "extensionUris": [],
+    "extensions": [],
+    "relations": [{
+      "root": {
+        "input": {
+          "extension_multi": {
+            "common": {
+              "emit": {
+                "outputMapping": [0, 1, 2, 3]
+              }
+            },
+            "inputs": [
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value1"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T1"]
+                  }
+                }
+              },
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value2"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T2"]
+                  }
+                }
+              }
+            ],
+            "detail": {
+              "@type": "/arrow.substrait_ext.AsOfJoinRel",
+              "keys" : [
+                {
+                  "on": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0,
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  "by": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1,
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+		},
+                {
+                  "on": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0,
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  "by": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1,
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+		}
+	      ],
+              "tolerance": -1000
+            }
+          }
+        },
+        "names": ["time", "key", "value1", "value2"]
+      }
+    }],
+    "expectedTypeUrls": []
+  })";
+
+  std::vector<std::shared_ptr<Schema>> input_schema = {
+      schema({field("time", int32()), field("key", int32()), field("value1", float64())}),
+      schema(
+          {field("time", int32()), field("key", int32()), field("value2", float64())})};
+  NamedTableProvider table_provider = ProvideMadeTable(
+      [&input_schema](
+          const std::vector<std::string>& names) -> Result<std::shared_ptr<Table>> {
+        if (names.size() != 1) {
+          return Status::Invalid("Multiple test table names");
+        }
+        if (names[0] == "T1") {
+          return TableFromJSON(input_schema[0],
+                               {"[[2, 1, 1.1], [4, 1, 2.1], [6, 2, 3.1]]"});
+        }
+        if (names[0] == "T2") {
+          return TableFromJSON(input_schema[1],
+                               {"[[1, 1, 1.2], [3, 2, 2.2], [5, 2, 3.2]]"});
+        }
+        return Status::Invalid("Unknown test table name ", names[0]);
+      });
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto out_schema,
+      acero::asofjoin::MakeOutputSchema(
+          input_schema, {{FieldRef(0), {FieldRef(1)}}, {FieldRef(0), {FieldRef(1)}}}));
+  auto expected_table = TableFromJSON(
+      out_schema, {"[[2, 1, 1.1, 1.2], [4, 1, 2.1, 1.2], [6, 2, 3.1, 3.2]]"});
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
+}
+
+TEST(Substrait, AsOfJoinDefaultEmit) {
+  std::string substrait_json = R"({
+    "extensionUris": [],
+    "extensions": [],
+    "relations": [{
+      "root": {
+        "input": {
+          "extension_multi": {
+            "inputs": [
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value1"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T1"]
+                  }
+                }
+              },
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value2"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T2"]
+                  }
+                }
+              }
+            ],
+            "detail": {
+              "@type": "/arrow.substrait_ext.AsOfJoinRel",
+              "keys" : [
+                {
+                  "on": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0,
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  "by": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1,
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+		},
+                {
+                  "on": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0,
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  },
+                  "by": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1,
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ]
+		}
+	      ],
+              "tolerance": -1000
+            }
+          }
+        },
+        "names": ["time", "key", "value1", "value2"]
+      }
+    }],
+    "expectedTypeUrls": []
+  })";
+
+  std::vector<std::shared_ptr<Schema>> input_schema = {
+      schema({field("time", int32()), field("key", int32()), field("value1", float64())}),
+      schema(
+          {field("time", int32()), field("key", int32()), field("value2", float64())})};
+  NamedTableProvider table_provider = ProvideMadeTable(
+      [&input_schema](
+          const std::vector<std::string>& names) -> Result<std::shared_ptr<Table>> {
+        if (names.size() != 1) {
+          return Status::Invalid("Multiple test table names");
+        }
+        if (names[0] == "T1") {
+          return TableFromJSON(input_schema[0],
+                               {"[[2, 1, 1.1], [4, 1, 2.1], [6, 2, 3.1]]"});
+        }
+        if (names[0] == "T2") {
+          return TableFromJSON(input_schema[1],
+                               {"[[1, 1, 1.2], [3, 2, 2.2], [5, 2, 3.2]]"});
+        }
+        return Status::Invalid("Unknown test table name ", names[0]);
+      });
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+
+  auto out_schema = schema({field("time", int32()), field("key", int32()),
+                            field("value1", float64()), field("value2", float64())});
+
+  auto expected_table = TableFromJSON(
+      out_schema, {"[[2, 1, 1.1, 1.2], [4, 1, 2.1, 1.2], [6, 2, 3.1, 3.2]]"});
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
+}
+
+TEST(Substrait, PlanWithNamedTapExtension) {
+  // This demos an extension relation
+  std::string substrait_json = R"({
+    "extensionUris": [],
+    "extensions": [],
+    "relations": [{
+      "root": {
+        "input": {
+          "extension_multi": {
+            "inputs": [
+              {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "baseSchema": {
+                    "names": ["time", "key", "value"],
+                    "struct": {
+                      "types": [
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "i32": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        {
+                          "fp64": {
+                            "typeVariationReference": 0,
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }
+                      ],
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "namedTable": {
+                    "names": ["T"]
+                  }
+                }
+              }
+            ],
+            "detail": {
+              "@type": "/arrow.substrait_ext.NamedTapRel",
+              "kind" : "pass_for_named_tap",
+              "name" : "does_not_matter",
+              "columns" : ["pass_time", "pass_key", "pass_value"]
+            }
+          }
+        },
+        "names": ["t", "k", "v"]
+      }
+    }],
+    "expectedTypeUrls": []
+  })";
+
+  ASSERT_OK(AddPassFactory("pass_for_named_tap"));
+
+  std::shared_ptr<Schema> input_schema =
+      schema({field("time", int32()), field("key", int32()), field("value", float64())});
+  NamedTableProvider table_provider = AlwaysProvideSameTable(
+      TableFromJSON(input_schema, {"[[2, 1, 1.1], [4, 1, 2.1], [6, 2, 3.1]]"}));
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+  conversion_options.named_tap_provider =
+      [](const std::string& tap_kind, std::vector<acero::Declaration::Input> inputs,
+         const std::string& tap_name,
+         std::shared_ptr<Schema> tap_schema) -> Result<acero::Declaration> {
+    return acero::Declaration{tap_kind, std::move(inputs), acero::ExecNodeOptions{}};
+  };
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+
+  std::shared_ptr<Schema> output_schema =
+      schema({field("t", int32()), field("k", int32()), field("v", float64())});
+  auto expected_table =
+      TableFromJSON(output_schema, {"[[2, 1, 1.1], [4, 1, 2.1], [6, 2, 3.1]]"});
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
+}
+
+TEST(Substrait, PlanWithSegmentedAggregateExtension) {
+  // This demos an extension relation
+  std::string substrait_json = R"({
+    "extensionUris": [{
+      "extension_uri_anchor": 0,
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
+    }],
+    "extensions": [{
+      "extension_function": {
+        "extension_uri_reference": 0,
+        "function_anchor": 0,
+        "name": "sum"
+      }
+    }],
+    "relations": [{
+      "root": {
+        "input": {
+          "extension_single": {
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {
+                  }
+                },
+                "baseSchema": {
+                  "names": ["time", "key", "value"],
+                  "struct": {
+                    "types": [
+                      {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      {
+                        "fp64": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ],
+                    "typeVariationReference": 0,
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": ["T"]
+                }
+              }
+            },
+            "detail": {
+              "@type": "/arrow.substrait_ext.SegmentedAggregateRel",
+              "grouping_keys": [{
+                "directReference": {
+                  "structField": {
+                    "field": 1
+                  }
+                },
+                "rootReference": {}
+              }],
+              "segment_keys": [{
+                "directReference": {
+                  "structField": {
+                    "field": 0
+                  }
+                },
+                "rootReference": {}
+              }],
+              "measures": [{
+                "measure": {
+                  "functionReference": 0,
+                  "arguments": [{
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 2
+                          }
+                        }
+                      }
+                    }
+                  }],
+                  "sorts": [],
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                  "outputType": {
+                    "i64": {}
+                  }
+                }
+              }]
+            }
+          }
+        },
+        "names": ["k", "t", "v"]
+      }
+    }],
+    "expectedTypeUrls": []
+  })";
+
+  std::shared_ptr<Schema> input_schema =
+      schema({field("time", int32()), field("key", int32()), field("value", float64())});
+  NamedTableProvider table_provider = AlwaysProvideSameTable(
+      TableFromJSON(input_schema, {"[[1, 1, 1], [1, 2, 2], [1, 1, 3],"
+                                   " [2, 2, 4], [2, 1, 5], [2, 2, 6]]"}));
+  ConversionOptions conversion_options;
+  conversion_options.named_table_provider = std::move(table_provider);
+  conversion_options.named_tap_provider =
+      [](const std::string& tap_kind, std::vector<acero::Declaration::Input> inputs,
+         const std::string& tap_name,
+         std::shared_ptr<Schema> tap_schema) -> Result<acero::Declaration> {
+    return acero::Declaration{tap_kind, std::move(inputs), acero::ExecNodeOptions{}};
+  };
+
+  ASSERT_OK_AND_ASSIGN(auto buf, internal::SubstraitFromJSON("Plan", substrait_json));
+
+  std::shared_ptr<Schema> output_schema =
+      schema({field("k", int32()), field("t", int32()), field("v", float64())});
+  auto expected_table =
+      TableFromJSON(output_schema, {"[[1, 1, 4], [1, 2, 2], [2, 2, 10], [2, 1, 5]]"});
+  CheckRoundTripResult(std::move(expected_table), buf, {}, conversion_options);
 }
 
 }  // namespace engine

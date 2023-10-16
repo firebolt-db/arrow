@@ -42,7 +42,6 @@ body:
         - C#
         - C++
         - C++ - Gandiva
-        - C++ - Plasma
         - Continuous Integration
         - Developer Tools
         - Documentation
@@ -59,6 +58,7 @@ body:
         - Parquet
         - Python
         - R
+        - Release
         - Ruby
         - Swift
         - Website

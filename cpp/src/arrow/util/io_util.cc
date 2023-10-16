@@ -108,8 +108,10 @@
 
 #elif __APPLE__
 #include <mach/mach.h>
+#include <sys/sysctl.h>
 
 #elif __linux__
+#include <sys/sysinfo.h>
 #include <fstream>
 #endif
 
@@ -133,11 +135,11 @@ std::basic_string<CharT> ReplaceChars(std::basic_string<CharT> s, CharT find, Ch
   return s;
 }
 
-Result<NativePathString> StringToNative(const std::string& s) {
+Result<NativePathString> StringToNative(std::string_view s) {
 #if _WIN32
   return ::arrow::util::UTF8ToWideString(s);
 #else
-  return s;
+  return std::string(s);
 #endif
 }
 
@@ -191,7 +193,7 @@ NativePathString NativeParent(const NativePathString& s) {
   }
 }
 
-Status ValidatePath(const std::string& s) {
+Status ValidatePath(std::string_view s) {
   if (s.find_first_of('\0') != std::string::npos) {
     return Status::Invalid("Embedded NUL char in path: '", s, "'");
   }
@@ -587,7 +589,7 @@ Result<PlatformFilename> PlatformFilename::Real() const {
   return PlatformFilename(std::move(real));
 }
 
-Result<PlatformFilename> PlatformFilename::FromString(const std::string& file_name) {
+Result<PlatformFilename> PlatformFilename::FromString(std::string_view file_name) {
   RETURN_NOT_OK(ValidatePath(file_name));
   ARROW_ASSIGN_OR_RAISE(auto ns, StringToNative(file_name));
   return PlatformFilename(std::move(ns));
@@ -601,8 +603,9 @@ PlatformFilename PlatformFilename::Join(const PlatformFilename& child) const {
   }
 }
 
-Result<PlatformFilename> PlatformFilename::Join(const std::string& child_name) const {
-  ARROW_ASSIGN_OR_RAISE(auto child, PlatformFilename::FromString(child_name));
+Result<PlatformFilename> PlatformFilename::Join(std::string_view child_name) const {
+  ARROW_ASSIGN_OR_RAISE(auto child,
+                        PlatformFilename::FromString(std::string(child_name)));
   return Join(child);
 }
 
@@ -2161,6 +2164,35 @@ int64_t GetCurrentRSS() {
 #else
   // AIX, BSD, Solaris, and Unknown OS ------------------------
   return 0;  // Unsupported.
+#endif
+}
+
+int64_t GetTotalMemoryBytes() {
+#if defined(_WIN32)
+  ULONGLONG result_kb;
+  if (!GetPhysicallyInstalledSystemMemory(&result_kb)) {
+    ARROW_LOG(WARNING) << "Failed to resolve total RAM size: "
+                       << std::strerror(GetLastError());
+    return -1;
+  }
+  return static_cast<int64_t>(result_kb * 1024);
+#elif defined(__APPLE__)
+  int64_t result;
+  size_t size = sizeof(result);
+  if (sysctlbyname("hw.memsize", &result, &size, nullptr, 0) == -1) {
+    ARROW_LOG(WARNING) << "Failed to resolve total RAM size";
+    return -1;
+  }
+  return result;
+#elif defined(__linux__)
+  struct sysinfo info;
+  if (sysinfo(&info) == -1) {
+    ARROW_LOG(WARNING) << "Failed to resolve total RAM size: " << std::strerror(errno);
+    return -1;
+  }
+  return static_cast<int64_t>(info.totalram * info.mem_unit);
+#else
+  return 0;
 #endif
 }
 

@@ -18,7 +18,6 @@
 #include <memory>
 
 #include "./arrow_types.h"
-#include "./arrow_vctrs.h"
 
 #include <arrow/array/array_base.h>
 #include <arrow/chunked_array.h>
@@ -186,7 +185,7 @@ std::shared_ptr<arrow::DataType> InferArrowTypeFromVector<VECSXP>(SEXP x) {
 }
 
 std::shared_ptr<arrow::DataType> InferArrowType(SEXP x) {
-  if (arrow::r::altrep::is_arrow_altrep(x)) {
+  if (arrow::r::altrep::is_unmaterialized_arrow_altrep(x)) {
     return arrow::r::altrep::vec_to_arrow_altrep_bypass(x)->type();
   }
 

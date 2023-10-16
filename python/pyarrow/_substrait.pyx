@@ -26,7 +26,9 @@ from pyarrow.includes.libarrow cimport *
 from pyarrow.includes.libarrow_substrait cimport *
 
 
-cdef CDeclaration _create_named_table_provider(dict named_args, const std_vector[c_string]& names):
+cdef CDeclaration _create_named_table_provider(
+    dict named_args, const std_vector[c_string]& names, const CSchema& schema
+):
     cdef:
         c_string c_name
         shared_ptr[CTable] c_in_table
@@ -38,8 +40,9 @@ cdef CDeclaration _create_named_table_provider(dict named_args, const std_vector
     for i in range(names.size()):
         c_name = names[i]
         py_names.append(frombytes(c_name))
+    py_schema = pyarrow_wrap_schema(make_shared[CSchema](schema))
 
-    py_table = named_args["provider"](py_names)
+    py_table = named_args["provider"](py_names, py_schema)
     c_in_table = pyarrow_unwrap_table(py_table)
     c_tablesourceopts = make_shared[CTableSourceNodeOptions](c_in_table)
     c_input_node_opts = static_pointer_cast[CExecNodeOptions, CTableSourceNodeOptions](
@@ -48,7 +51,7 @@ cdef CDeclaration _create_named_table_provider(dict named_args, const std_vector
                         no_c_inputs, c_input_node_opts)
 
 
-def run_query(plan, table_provider=None):
+def run_query(plan, *, table_provider=None, use_threads=True):
     """
     Execute a Substrait plan and read the results as a RecordBatchReader.
 
@@ -58,8 +61,12 @@ def run_query(plan, table_provider=None):
         The serialized Substrait plan to execute.
     table_provider : object (optional)
         A function to resolve any NamedTable relation to a table.
-        The function will receive a single argument which will be a list
-        of strings representing the table name and should return a pyarrow.Table.
+        The function will receive two arguments which will be a list
+        of strings representing the table name and a pyarrow.Schema representing
+        the expected schema and should return a pyarrow.Table.
+    use_threads : bool, default True
+        If True then multiple threads will be used to run the query.  If False then
+        all CPU intensive work will be done on the calling thread.
 
     Returns
     -------
@@ -73,7 +80,7 @@ def run_query(plan, table_provider=None):
     >>> import pyarrow.substrait as substrait
     >>> test_table_1 = pa.Table.from_pydict({"x": [1, 2, 3]})
     >>> test_table_2 = pa.Table.from_pydict({"x": [4, 5, 6]})
-    >>> def table_provider(names):
+    >>> def table_provider(names, schema):
     ...     if not names:
     ...        raise Exception("No names provided")
     ...     elif names[0] == "t1":
@@ -82,7 +89,7 @@ def run_query(plan, table_provider=None):
     ...        return test_table_2
     ...     else:
     ...        raise Exception("Unrecognized table name")
-    ... 
+    ...
     >>> substrait_query = '''
     ...         {
     ...             "relations": [
@@ -107,7 +114,7 @@ def run_query(plan, table_provider=None):
     ...         }
     ... '''
     >>> buf = pa._substrait._parse_json_plan(tobytes(substrait_query))
-    >>> reader = pa.substrait.run_query(buf, table_provider)
+    >>> reader = pa.substrait.run_query(buf, table_provider=table_provider)
     >>> reader.read_all()
     pyarrow.Table
     x: int64
@@ -119,11 +126,11 @@ def run_query(plan, table_provider=None):
         CResult[shared_ptr[CRecordBatchReader]] c_res_reader
         shared_ptr[CRecordBatchReader] c_reader
         RecordBatchReader reader
-        c_string c_str_plan
         shared_ptr[CBuffer] c_buf_plan
-        function[CNamedTableProvider] c_named_table_provider
         CConversionOptions c_conversion_options
+        c_bool c_use_threads
 
+    c_use_threads = use_threads
     if isinstance(plan, bytes):
         c_buf_plan = pyarrow_unwrap_buffer(py_buffer(plan))
     elif isinstance(plan, Buffer):
@@ -141,7 +148,8 @@ def run_query(plan, table_provider=None):
 
     with nogil:
         c_res_reader = ExecuteSerializedPlan(
-            deref(c_buf_plan), default_extension_id_registry(), GetFunctionRegistry(), c_conversion_options)
+            deref(c_buf_plan), default_extension_id_registry(),
+            GetFunctionRegistry(), c_conversion_options, c_use_threads)
 
     c_reader = GetResultValue(c_res_reader)
 

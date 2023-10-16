@@ -214,6 +214,30 @@ TEST(TestFlight, DISABLED_IpV6Port) {
   ASSERT_OK(client->ListFlights());
 }
 
+TEST(TestFlight, ServerCallContextIncomingHeaders) {
+  auto server = ExampleTestServer();
+  ASSERT_OK_AND_ASSIGN(auto location, Location::ForGrpcTcp("localhost", 0));
+  FlightServerOptions options(location);
+  ASSERT_OK(server->Init(options));
+
+  ASSERT_OK_AND_ASSIGN(auto client, FlightClient::Connect(server->location()));
+  Action action;
+  action.type = "list-incoming-headers";
+  action.body = Buffer::FromString("test-header");
+  FlightCallOptions call_options;
+  call_options.headers.emplace_back("test-header1", "value1");
+  call_options.headers.emplace_back("test-header2", "value2");
+  ASSERT_OK_AND_ASSIGN(auto stream, client->DoAction(call_options, action));
+  ASSERT_OK_AND_ASSIGN(auto result, stream->Next());
+  ASSERT_NE(result.get(), nullptr);
+  ASSERT_EQ(result->body->ToString(), "test-header1: value1");
+  ASSERT_OK_AND_ASSIGN(result, stream->Next());
+  ASSERT_NE(result.get(), nullptr);
+  ASSERT_EQ(result->body->ToString(), "test-header2: value2");
+  ASSERT_OK_AND_ASSIGN(result, stream->Next());
+  ASSERT_EQ(result.get(), nullptr);
+}
+
 // ----------------------------------------------------------------------
 // Client tests
 
@@ -395,14 +419,19 @@ class TestTls : public ::testing::Test {
     ASSERT_RAISES(UnknownError, server_->Init(options));
     ASSERT_OK(ExampleTlsCertificates(&options.tls_certificates));
     ASSERT_OK(server_->Init(options));
+    server_is_initialized_ = true;
 
     ASSERT_OK_AND_ASSIGN(location_, Location::ForGrpcTls("localhost", server_->port()));
     ASSERT_OK(ConnectClient());
   }
 
   void TearDown() {
-    ASSERT_OK(client_->Close());
-    ASSERT_OK(server_->Shutdown());
+    if (client_) {
+      ASSERT_OK(client_->Close());
+    }
+    if (server_is_initialized_) {
+      ASSERT_OK(server_->Shutdown());
+    }
     grpc_shutdown();
   }
 
@@ -418,11 +447,12 @@ class TestTls : public ::testing::Test {
   Location location_;
   std::unique_ptr<FlightClient> client_;
   std::unique_ptr<FlightServerBase> server_;
+  bool server_is_initialized_;
 };
 
 // A server middleware that rejects all calls.
 class RejectServerMiddlewareFactory : public ServerMiddlewareFactory {
-  Status StartCall(const CallInfo& info, const CallHeaders& incoming_headers,
+  Status StartCall(const CallInfo& info, const ServerCallContext& context,
                    std::shared_ptr<ServerMiddleware>* middleware) override {
     return MakeFlightError(FlightStatusCode::Unauthenticated, "All calls are rejected");
   }
@@ -454,7 +484,7 @@ class CountingServerMiddlewareFactory : public ServerMiddlewareFactory {
  public:
   CountingServerMiddlewareFactory() : successful_(0), failed_(0) {}
 
-  Status StartCall(const CallInfo& info, const CallHeaders& incoming_headers,
+  Status StartCall(const CallInfo& info, const ServerCallContext& context,
                    std::shared_ptr<ServerMiddleware>* middleware) override {
     *middleware = std::make_shared<CountingServerMiddleware>(&successful_, &failed_);
     return Status::OK();
@@ -487,10 +517,10 @@ class TracingTestServerMiddlewareFactory : public ServerMiddlewareFactory {
  public:
   TracingTestServerMiddlewareFactory() {}
 
-  Status StartCall(const CallInfo& info, const CallHeaders& incoming_headers,
+  Status StartCall(const CallInfo& info, const ServerCallContext& context,
                    std::shared_ptr<ServerMiddleware>* middleware) override {
     const std::pair<CallHeaders::const_iterator, CallHeaders::const_iterator>& iter_pair =
-        incoming_headers.equal_range("x-tracing-span-id");
+        context.incoming_headers().equal_range("x-tracing-span-id");
     if (iter_pair.first != iter_pair.second) {
       const std::string_view& value = (*iter_pair.first).second;
       *middleware = std::make_shared<TracingTestServerMiddleware>(std::string(value));
@@ -548,10 +578,10 @@ class HeaderAuthServerMiddlewareFactory : public ServerMiddlewareFactory {
  public:
   HeaderAuthServerMiddlewareFactory() {}
 
-  Status StartCall(const CallInfo& info, const CallHeaders& incoming_headers,
+  Status StartCall(const CallInfo& info, const ServerCallContext& context,
                    std::shared_ptr<ServerMiddleware>* middleware) override {
     std::string username, password;
-    ParseBasicHeader(incoming_headers, username, password);
+    ParseBasicHeader(context.incoming_headers(), username, password);
     if ((username == kValidUsername) && (password == kValidPassword)) {
       *middleware = std::make_shared<HeaderAuthServerMiddleware>();
     } else if ((username == kInvalidUsername) && (password == kInvalidPassword)) {
@@ -589,13 +619,13 @@ class BearerAuthServerMiddlewareFactory : public ServerMiddlewareFactory {
  public:
   BearerAuthServerMiddlewareFactory() : isValid_(false) {}
 
-  Status StartCall(const CallInfo& info, const CallHeaders& incoming_headers,
+  Status StartCall(const CallInfo& info, const ServerCallContext& context,
                    std::shared_ptr<ServerMiddleware>* middleware) override {
     const std::pair<CallHeaders::const_iterator, CallHeaders::const_iterator>& iter_pair =
-        incoming_headers.equal_range(kAuthHeader);
+        context.incoming_headers().equal_range(kAuthHeader);
     if (iter_pair.first != iter_pair.second) {
-      *middleware =
-          std::make_shared<BearerAuthServerMiddleware>(incoming_headers, &isValid_);
+      *middleware = std::make_shared<BearerAuthServerMiddleware>(
+          context.incoming_headers(), &isValid_);
     }
     return Status::OK();
   }
@@ -894,7 +924,8 @@ TEST_F(TestErrorMiddleware, TestMetadata) {
   action.type = "action1";
 
   action.body = Buffer::FromString("action1-content");
-  Status s = client_->DoAction(action).status();
+  ASSERT_OK_AND_ASSIGN(auto stream, client_->DoAction(action));
+  Status s = stream->Next().status();
   ASSERT_FALSE(s.ok());
   std::shared_ptr<FlightStatusDetail> flightStatusDetail =
       FlightStatusDetail::UnwrapStatus(s);
@@ -1022,7 +1053,7 @@ TEST_F(TestFlightClient, TimeoutFires) {
   Status status = client->GetFlightInfo(options, FlightDescriptor{}).status();
   auto end = std::chrono::system_clock::now();
 #ifdef ARROW_WITH_TIMING_TESTS
-  EXPECT_LE(end - start, std::chrono::milliseconds{400});
+  EXPECT_LE(end - start, std::chrono::milliseconds{1200});
 #else
   ARROW_UNUSED(end - start);
 #endif
@@ -1095,7 +1126,8 @@ TEST_F(TestAuthHandler, FailUnauthenticatedCalls) {
   Action action;
   action.type = "";
   action.body = Buffer::FromString("");
-  status = client_->DoAction(action).status();
+  ASSERT_OK_AND_ASSIGN(auto stream, client_->DoAction(action));
+  status = stream->Next().status();
   ASSERT_RAISES(IOError, status);
   ASSERT_THAT(status.message(), ::testing::HasSubstr("Invalid token"));
 
@@ -1192,7 +1224,8 @@ TEST_F(TestBasicAuthHandler, FailUnauthenticatedCalls) {
   Action action;
   action.type = "";
   action.body = Buffer::FromString("");
-  status = client_->DoAction(action).status();
+  ASSERT_OK_AND_ASSIGN(auto stream, client_->DoAction(action));
+  status = stream->Next().status();
   ASSERT_RAISES(IOError, status);
   ASSERT_THAT(status.message(), ::testing::HasSubstr("Invalid token"));
 
@@ -1290,7 +1323,8 @@ TEST_F(TestTls, OverrideHostname) {
   Action action;
   action.type = "test";
   action.body = Buffer::FromString("");
-  ASSERT_RAISES(IOError, client->DoAction(options, action));
+  ASSERT_OK_AND_ASSIGN(auto stream, client->DoAction(options, action));
+  ASSERT_RAISES(IOError, stream->Next());
 }
 
 // Test the facility for setting generic transport options.
@@ -1308,7 +1342,8 @@ TEST_F(TestTls, OverrideHostnameGeneric) {
   Action action;
   action.type = "test";
   action.body = Buffer::FromString("");
-  ASSERT_RAISES(IOError, client->DoAction(options, action));
+  ASSERT_OK_AND_ASSIGN(auto stream, client->DoAction(options, action));
+  ASSERT_RAISES(IOError, stream->Next());
   // Could check error message for the gRPC error message but it isn't
   // necessarily stable
 }
@@ -1352,6 +1387,8 @@ TEST_F(TestPropagatingMiddleware, Propagate) {
 
   ASSERT_OK_AND_ASSIGN(result, stream->Next());
   ASSERT_EQ("trace-id", result->body->ToString());
+  ASSERT_OK_AND_ASSIGN(result, stream->Next());
+  ASSERT_EQ(nullptr, result);
   ValidateStatus(Status::OK(), FlightMethod::DoAction);
 }
 
@@ -1462,8 +1499,12 @@ class CancelTestServer : public FlightServerBase {
     *listings = std::make_unique<ForeverFlightListing>();
     return Status::OK();
   }
-  Status DoAction(const ServerCallContext&, const Action&,
+  Status DoAction(const ServerCallContext&, const Action& action,
                   std::unique_ptr<ResultStream>* result) override {
+    if (action.type == "inc") {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      counter_++;
+    }
     *result = std::make_unique<ForeverResultStream>();
     return Status::OK();
   }
@@ -1477,6 +1518,11 @@ class CancelTestServer : public FlightServerBase {
     *data_stream = std::make_unique<ForeverDataStream>();
     return Status::OK();
   }
+
+  int64_t CheckCounter() const { return counter_; }
+
+ private:
+  std::atomic<int64_t> counter_ = 0;
 };
 
 class TestCancel : public ::testing::Test {
@@ -1489,6 +1535,9 @@ class TestCancel : public ::testing::Test {
   void TearDown() {
     ASSERT_OK(client_->Close());
     ASSERT_OK(server_->Shutdown());
+  }
+  CancelTestServer* Server() const {
+    return static_cast<CancelTestServer*>(server_.get());
   }
 
  protected:
@@ -1509,9 +1558,27 @@ TEST_F(TestCancel, DoAction) {
   StopSource stop_source;
   FlightCallOptions options;
   options.stop_token = stop_source.token();
+  ASSERT_OK_AND_ASSIGN(auto stream, client_->DoAction(options, {}));
+  ASSERT_OK_AND_ASSIGN(auto result, stream->Next());
+  ASSERT_EQ("foo", result->body->ToString());
   stop_source.RequestStop(Status::Cancelled("StopSource"));
   EXPECT_RAISES_WITH_MESSAGE_THAT(Cancelled, ::testing::HasSubstr("StopSource"),
-                                  client_->DoAction(options, {}));
+                                  stream->Next());
+}
+
+TEST_F(TestCancel, DoActionSideEffect) {
+  // GH-15150: DoAction should at least wait for the server to begin
+  // the response, since existing code may be using DoAction solely
+  // for the side effect.
+  ASSERT_EQ(0, Server()->CheckCounter());
+  StopSource stop_source;
+  FlightCallOptions options;
+  options.stop_token = stop_source.token();
+  // Will block for a bit, but not forever
+  ASSERT_OK_AND_ASSIGN(auto stream, client_->DoAction(options, {"inc", nullptr}));
+  // Side effect should have happened
+  ASSERT_EQ(1, Server()->CheckCounter());
+  stop_source.RequestStop(Status::Cancelled("StopSource"));
 }
 
 TEST_F(TestCancel, ListActions) {

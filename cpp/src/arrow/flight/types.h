@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -123,6 +124,11 @@ ARROW_FLIGHT_EXPORT
 Status MakeFlightError(FlightStatusCode code, std::string message,
                        std::string extra_info = {});
 
+/// \brief Headers sent from the client or server.
+///
+/// Header values are ordered.
+using CallHeaders = std::multimap<std::string_view, std::string_view>;
+
 /// \brief A TLS certificate plus key.
 struct ARROW_FLIGHT_EXPORT CertKeyPair {
   /// \brief The certificate in PEM format.
@@ -140,6 +146,7 @@ struct ARROW_FLIGHT_EXPORT ActionType {
   /// \brief A human-readable description of the action.
   std::string description;
 
+  std::string ToString() const;
   bool Equals(const ActionType& other) const;
 
   friend bool operator==(const ActionType& left, const ActionType& right) {
@@ -161,6 +168,7 @@ struct ARROW_FLIGHT_EXPORT Criteria {
   /// Opaque criteria expression, dependent on server implementation
   std::string expression;
 
+  std::string ToString() const;
   bool Equals(const Criteria& other) const;
 
   friend bool operator==(const Criteria& left, const Criteria& right) {
@@ -185,6 +193,7 @@ struct ARROW_FLIGHT_EXPORT Action {
   /// The action content as a Buffer
   std::shared_ptr<Buffer> body;
 
+  std::string ToString() const;
   bool Equals(const Action& other) const;
 
   friend bool operator==(const Action& left, const Action& right) {
@@ -205,6 +214,7 @@ struct ARROW_FLIGHT_EXPORT Action {
 struct ARROW_FLIGHT_EXPORT Result {
   std::shared_ptr<Buffer> body;
 
+  std::string ToString() const;
   bool Equals(const Result& other) const;
 
   friend bool operator==(const Result& left, const Result& right) {
@@ -226,6 +236,7 @@ struct ARROW_FLIGHT_EXPORT BasicAuth {
   std::string username;
   std::string password;
 
+  std::string ToString() const;
   bool Equals(const BasicAuth& other) const;
 
   friend bool operator==(const BasicAuth& left, const BasicAuth& right) {
@@ -312,6 +323,7 @@ struct ARROW_FLIGHT_EXPORT FlightDescriptor {
 struct ARROW_FLIGHT_EXPORT Ticket {
   std::string ticket;
 
+  std::string ToString() const;
   bool Equals(const Ticket& other) const;
 
   friend bool operator==(const Ticket& left, const Ticket& right) {
@@ -429,6 +441,7 @@ struct ARROW_FLIGHT_EXPORT FlightEndpoint {
   /// generated
   std::vector<Location> locations;
 
+  std::string ToString() const;
   bool Equals(const FlightEndpoint& other) const;
 
   friend bool operator==(const FlightEndpoint& left, const FlightEndpoint& right) {
@@ -469,7 +482,7 @@ struct ARROW_FLIGHT_EXPORT SchemaResult {
   /// \brief return schema
   /// \param[in,out] dictionary_memo for dictionary bookkeeping, will
   /// be modified
-  /// \return Arrrow result with the reconstructed Schema
+  /// \return Arrow result with the reconstructed Schema
   arrow::Result<std::shared_ptr<Schema>> GetSchema(
       ipc::DictionaryMemo* dictionary_memo) const;
 
@@ -479,6 +492,7 @@ struct ARROW_FLIGHT_EXPORT SchemaResult {
 
   const std::string& serialized_schema() const { return raw_schema_; }
 
+  std::string ToString() const;
   bool Equals(const SchemaResult& other) const;
 
   friend bool operator==(const SchemaResult& left, const SchemaResult& right) {
@@ -508,17 +522,17 @@ class ARROW_FLIGHT_EXPORT FlightInfo {
     std::vector<FlightEndpoint> endpoints;
     int64_t total_records;
     int64_t total_bytes;
+    bool ordered;
   };
 
-  explicit FlightInfo(const Data& data) : data_(data), reconstructed_schema_(false) {}
-  explicit FlightInfo(Data&& data)
-      : data_(std::move(data)), reconstructed_schema_(false) {}
+  explicit FlightInfo(Data data) : data_(std::move(data)), reconstructed_schema_(false) {}
 
   /// \brief Factory method to construct a FlightInfo.
   static arrow::Result<FlightInfo> Make(const Schema& schema,
                                         const FlightDescriptor& descriptor,
                                         const std::vector<FlightEndpoint>& endpoints,
-                                        int64_t total_records, int64_t total_bytes);
+                                        int64_t total_records, int64_t total_bytes,
+                                        bool ordered = false);
 
   /// \brief Deserialize the Arrow schema of the dataset. Populate any
   ///   dictionary encoded fields into a DictionaryMemo for
@@ -548,6 +562,9 @@ class ARROW_FLIGHT_EXPORT FlightInfo {
   /// The total number of bytes in the dataset. If unknown, set to -1
   int64_t total_bytes() const { return data_.total_bytes; }
 
+  /// Whether endpoints are in the same order as the data.
+  bool ordered() const { return data_.ordered; }
+
   /// \brief Get the wire-format representation of this type.
   ///
   /// Useful when interoperating with non-Flight systems (e.g. REST
@@ -567,6 +584,20 @@ class ARROW_FLIGHT_EXPORT FlightInfo {
   ARROW_DEPRECATED("Deprecated in 8.0.0. Use Result-returning overload instead.")
   static Status Deserialize(const std::string& serialized,
                             std::unique_ptr<FlightInfo>* out);
+
+  std::string ToString() const;
+
+  /// Compare two FlightInfo for equality. This will compare the
+  /// serialized schema representations, NOT the logical equality of
+  /// the schemas.
+  bool Equals(const FlightInfo& other) const;
+
+  friend bool operator==(const FlightInfo& left, const FlightInfo& right) {
+    return left.Equals(right);
+  }
+  friend bool operator!=(const FlightInfo& left, const FlightInfo& right) {
+    return !(left == right);
+  }
 
  private:
   Data data_;

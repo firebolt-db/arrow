@@ -61,7 +61,6 @@ generated properly.
         mvn clean install -Papache-release
 
     - Have the build requirements for cpp and c_glib installed.
-    - Set the ``JIRA_USERNAME`` and ``JIRA_PASSWORD`` environment variables
     - Set the ``CROSSBOW_GITHUB_TOKEN`` environment variable to automatically create the verify release Pull Request.
     - Install ``en_US.UTF-8`` locale. You can confirm available locales by ``locale -a``.
     - Install Python 3 as python
@@ -87,13 +86,16 @@ Ensure local tags are removed, gpg-agent is set and JIRA tickets are correctly a
     # The end of the generated report shows the JIRA tickets with wrong version number assigned.
     archery release curate <version>
 
+Ensure a major version milestone for a follow up release is created on GitHub. This will
+automatically be used by our merge script as the new version for issues closed when
+the maintenance branch is created.
 
 Creating a Release Candidate
 ============================
 
 These are the different steps that are required to create a Release Candidate.
 
-For the initial Release Candidate, we will create a maintenance branch from master.
+For the initial Release Candidate, we will create a maintenance branch from main.
 Follow up Release Candidates will update the maintenance branch by cherry-picking
 specific commits.
 
@@ -111,7 +113,7 @@ Create or update the corresponding maintenance branch
 
       .. code-block::
 
-            # Execute the following from an up to date master branch.
+            # Execute the following from an up to date main branch.
             # This will create a branch locally called maint-X.Y.Z.
             # X.Y.Z corresponds with the Major, Minor and Patch version number
             # of the release respectively. As an example 9.0.0
@@ -192,13 +194,8 @@ Verify the Release
 
 .. code-block::
 
-    # Once the automatic verification has passed merge the Release Candidate's branch to the maintenance branch
-    git checkout maint-<version>
-    git merge release-<version>-rc<rc-number>
-    git push apache maint-<version>
-    
-    # Start the vote thread on dev@arrow.apache.org
-    # To regenerate the email template use
+    # Once the automatic verification has passed start the vote thread
+    # on dev@arrow.apache.org. To regenerate the email template use
     SOURCE_DEFAULT=0 SOURCE_VOTE=1 dev/release/02-source.sh <version> <rc-number>
 
 Voting and approval
@@ -214,9 +211,8 @@ After the release vote, we must undertake many tasks to update source artifacts,
 
 Be sure to go through on the following checklist:
 
-#. Make the released version as "RELEASED" on JIRA
+#. Update the released milestone Date and set to "Closed" on GitHub
 #. Make the CPP PARQUET related version as "RELEASED" on JIRA
-#. Start the new version on JIRA on the ARROW project
 #. Start the new version on JIRA for the related CPP PARQUET version
 #. Merge changes on release branch to maintenance branch for patch releases
 #. Add the new release to the Apache Reporter System
@@ -240,6 +236,7 @@ Be sure to go through on the following checklist:
 #. Update version in Apache Arrow Cookbook
 #. Announce the new release
 #. Publish release blog posts
+#. Announce the release on Twitter
 #. Remove old artifacts
 
 .. dropdown:: Mark the released version as "RELEASED" on JIRA
@@ -395,29 +392,14 @@ Be sure to go through on the following checklist:
 
    You need an account on https://rubygems.org/ to release Ruby packages.
 
-   If you have an account on https://rubygems.org/ , you need to join owners of the following gems:
+   If you have an account on https://rubygems.org/ , you need to join owners of our gems.
 
-   - red-arrow gem
-   - red-arrow-cuda gem
-   - red-arrow-dataset gem
-   - red-arrow-flight gem
-   - red-arrow-flight-sql gem
-   - red-gandiva gem
-   - red-parquet gem
-   - red-plasma gem
-
-   Existing owners can add a new account to the owners of them by the following command lines:
+   Existing owners can add a new account to the owners of them by the following command line:
 
    .. code-block:: Bash
 
-      gem owner red-arrow -a NEW_ACCOUNT
-      gem owner red-arrow-cuda -a NEW_ACCOUNT
-      gem owner red-arrow-dataset -a NEW_ACCOUNT
-      gem owner red-arrow-flight -a NEW_ACCOUNT
-      gem owner red-arrow-flight-sql -a NEW_ACCOUNT
-      gem owner red-gandiva -a NEW_ACCOUNT
-      gem owner red-parquet -a NEW_ACCOUNT
-      gem owner red-plasma -a NEW_ACCOUNT
+      # dev/release/account-ruby.sh raulcd
+      dev/release/account-ruby.sh NEW_ACCOUNT
 
    Update RubyGems after Homebrew packages and MSYS2 packages are updated:
 
@@ -433,7 +415,9 @@ Be sure to go through on the following checklist:
 
    In order to publish the binary build to npm, you will need to get access to the project by asking one of the current collaborators listed at https://www.npmjs.com/package/apache-arrow packages.
 
-   When you have access, you can publish releases to npm by running the ``npm-release.sh`` script inside the JavaScript source release:
+   The package upload requires npm and yarn to be installed and 2FA to be configured on your account.
+
+   When you have access, you can publish releases to npm by running the the following script:
 
    .. code-block:: Bash
 
@@ -503,7 +487,7 @@ Be sure to go through on the following checklist:
    to point to the official (non-rc) URL and mark them as ready for review.
    Jeroen will merge, build the binary artifacts, and publish them in the
    right places. See the
-   `packaging checklist <https://github.com/apache/arrow/blob/master/r/PACKAGING.md>`_.
+   `packaging checklist <https://github.com/apache/arrow/blob/main/r/PACKAGING.md>`_.
    for a precise list of pull requests that must be made prior to submission
    to CRAN.
 
@@ -515,7 +499,7 @@ Be sure to go through on the following checklist:
    binaries will work and that everything runs on the same infrastructure that
    CRAN has, which is difficult/impossible to emulate fully on Travis or with
    Docker. For a precise list of checks, see the
-   `packaging checklist <https://github.com/apache/arrow/blob/master/r/PACKAGING.md>`_.
+   `packaging checklist <https://github.com/apache/arrow/blob/main/r/PACKAGING.md>`_.
 
    Once all checks are clean, we submit to CRAN, which has a web form for
    uploading packages. The release process requires email confirmation
@@ -553,7 +537,26 @@ Be sure to go through on the following checklist:
    :class-title: sd-fs-5
    :class-container: sd-shadow-md
 
-   TODO
+   Open a pull request to vcpkg:
+
+   .. code-block:: Bash
+
+      ## Fork https://github.com/conan-io/conan-center-index on GitHub.
+      ## You need to do this only once.
+      ##
+      ## Prepare your fork of https://github.com/conan-io/conan-center-index .
+      ## You need to do this only once.
+      # git clone git@github.com:kou/conan-center-index.git ../
+      git clone git@github.com:<YOUR_GITHUB_ID>/conan-center-index.git ../
+      cd ../conan-center-index
+      ## Add https://github.com/conan-io/conan-center-index.git as "upstream" remote.
+      git remote add upstream https://github.com/conan-io/conan-center-index.git
+      cd -
+
+      # dev/release/post-15-conan.sh 10.0.1 ../conan-center-index
+      dev/release/post-15-conan.sh X.Y.Z <YOUR_CONAN_CENTER_INDEX_FORK>
+
+   This script pushes a ``arrow-X.Y.Z`` branch to your ``conan-io/conan-center-index`` fork. You need to create a pull request from the ``arrow-X.Y.Z`` branch on your Web browser.
 
 .. dropdown:: Bump versions
    :animate: fade-in-slide-down
@@ -596,6 +599,8 @@ Be sure to go through on the following checklist:
       # dev/release/post-08-docs.sh 10.0.0 9.0.0
       dev/release/post-08-docs.sh X.Y.Z PREVIOUS_X.PREVIOUS_Y.PREVIOUS_Z
 
+   This script pushes a ``release-docs-X.Y.Z`` branch to your ``arrow-site`` fork. You need to create a Pull Request and use the ``asf-site`` branch as base for it.
+
 .. dropdown:: Update version in Apache Arrow Cookbook
    :animate: fade-in-slide-down
    :class-title: sd-fs-5
@@ -618,6 +623,15 @@ Be sure to go through on the following checklist:
    :class-container: sd-shadow-md
 
    TODO
+
+.. dropdown:: Announce the release on Twitter
+   :animate: fade-in-slide-down
+   :class-title: sd-fs-5
+   :class-container: sd-shadow-md
+
+   Post the release blog post on Twitter from the `@ApacheArrow <https://twitter.com/ApacheArrow>`_ handle.
+
+   PMC members have access or can request access, after which they can post via `TweetDeck <https://tweetdeck.twitter.com>`_.
 
 .. dropdown:: Remove old artifacts
    :animate: fade-in-slide-down

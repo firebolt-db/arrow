@@ -33,6 +33,8 @@
 #include "arrow/testing/gtest_util.h"
 #include "gtest/gtest.h"
 
+using namespace std::string_view_literals;  // NOLINT
+
 namespace arrow {
 namespace dataset {
 namespace internal {
@@ -84,7 +86,9 @@ class DatasetWriterTestFixture : public testing::Test {
     scheduler_finished_ =
         util::AsyncTaskScheduler::Make([&](util::AsyncTaskScheduler* scheduler) {
           scheduler_ = scheduler;
-          scheduler->AddSimpleTask([&] { return test_done_with_tasks_; });
+          scheduler->AddSimpleTask(
+              [&] { return test_done_with_tasks_; },
+              "DatasetWriterTestFixture::WaitForTestMethodToFinish"sv);
           return Status::OK();
         });
   }
@@ -270,6 +274,35 @@ TEST_F(DatasetWriterTestFixture, MaxRowsOneWrite) {
                      {"testdir/chunk-1.arrow", 10, 10},
                      {"testdir/chunk-2.arrow", 20, 10},
                      {"testdir/chunk-3.arrow", 30, 5}});
+}
+
+TEST_F(DatasetWriterTestFixture, MaxRowsOneWriteWithFunctor) {
+  // Left padding with up to four zeros
+  write_options_.max_rows_per_group = 10;
+  write_options_.max_rows_per_file = 10;
+  write_options_.basename_template_functor = [](int v) {
+    size_t n_zero = 4;
+    return std::string(n_zero - std::min(n_zero, std::to_string(v).length()), '0') +
+           std::to_string(v);
+  };
+  auto dataset_writer = MakeDatasetWriter();
+  dataset_writer->WriteRecordBatch(MakeBatch(25), "");
+  EndWriterChecked(dataset_writer.get());
+  AssertCreatedData({{"testdir/chunk-0000.arrow", 0, 10},
+                     {"testdir/chunk-0001.arrow", 10, 10},
+                     {"testdir/chunk-0002.arrow", 20, 5}});
+}
+
+TEST_F(DatasetWriterTestFixture, MaxRowsOneWriteWithBrokenFunctor) {
+  // Rewriting an exiting file will error out
+  write_options_.max_rows_per_group = 10;
+  write_options_.max_rows_per_file = 10;
+  write_options_.basename_template_functor = [](int v) { return "SAME"; };
+  auto dataset_writer = MakeDatasetWriter();
+  dataset_writer->WriteRecordBatch(MakeBatch(25), "");
+  dataset_writer->Finish();
+  test_done_with_tasks_.MarkFinished();
+  ASSERT_FINISHES_AND_RAISES(Invalid, scheduler_finished_);
 }
 
 TEST_F(DatasetWriterTestFixture, MaxRowsManyWrites) {

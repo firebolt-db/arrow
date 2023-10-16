@@ -18,6 +18,8 @@
 library(dplyr, warn.conflicts = FALSE)
 library(stringr)
 
+skip_if_not_available("acero")
+
 tbl <- example_data
 # Add some better string data
 tbl$verses <- verses[[1]]
@@ -117,14 +119,14 @@ test_that("collect(as_data_frame=FALSE)", {
   # collect(as_data_frame = FALSE) always returns Table now
   expect_r6_class(b2, "Table")
   expected <- tbl[tbl$int > 5 & !is.na(tbl$int), c("int", "chr")]
-  expect_equal(as.data.frame(b2), expected)
+  expect_equal_data_frame(b2, expected)
 
   b3 <- batch %>%
     select(int, strng = chr) %>%
     filter(int > 5) %>%
     collect(as_data_frame = FALSE)
   expect_r6_class(b3, "Table")
-  expect_equal(as.data.frame(b3), set_names(expected, c("int", "strng")))
+  expect_equal_data_frame(b3, set_names(expected, c("int", "strng")))
 
   b4 <- batch %>%
     select(int, strng = chr) %>%
@@ -132,8 +134,8 @@ test_that("collect(as_data_frame=FALSE)", {
     group_by(int) %>%
     collect(as_data_frame = FALSE)
   expect_r6_class(b4, "Table")
-  expect_equal(
-    as.data.frame(b4),
+  expect_equal_data_frame(
+    b4,
     expected %>%
       rename(strng = chr) %>%
       group_by(int)
@@ -154,14 +156,14 @@ test_that("compute()", {
 
   expect_r6_class(b2, "Table")
   expected <- tbl[tbl$int > 5 & !is.na(tbl$int), c("int", "chr")]
-  expect_equal(as.data.frame(b2), expected)
+  expect_equal_data_frame(b2, expected)
 
   b3 <- batch %>%
     select(int, strng = chr) %>%
     filter(int > 5) %>%
     compute()
   expect_r6_class(b3, "Table")
-  expect_equal(as.data.frame(b3), set_names(expected, c("int", "strng")))
+  expect_equal_data_frame(b3, set_names(expected, c("int", "strng")))
 
   b4 <- batch %>%
     select(int, strng = chr) %>%
@@ -169,8 +171,8 @@ test_that("compute()", {
     group_by(int) %>%
     compute()
   expect_r6_class(b4, "Table")
-  expect_equal(
-    as.data.frame(b4),
+  expect_equal_data_frame(
+    b4,
     expected %>%
       rename(strng = chr) %>%
       group_by(int)
@@ -178,58 +180,26 @@ test_that("compute()", {
 })
 
 test_that("head", {
-  batch <- record_batch(tbl)
-
-  b2 <- batch %>%
-    select(int, chr) %>%
-    filter(int > 5) %>%
-    head(2)
-  expect_s3_class(b2, "arrow_dplyr_query")
-  expected <- tbl[tbl$int > 5 & !is.na(tbl$int), c("int", "chr")][1:2, ]
-  expect_equal(collect(b2), expected)
-
-  b3 <- batch %>%
-    select(int, strng = chr) %>%
-    filter(int > 5) %>%
-    head(2)
-  expect_s3_class(b3, "arrow_dplyr_query")
-  expect_equal(as.data.frame(b3), set_names(expected, c("int", "strng")))
-
-  b4 <- batch %>%
-    select(int, strng = chr) %>%
-    filter(int > 5) %>%
-    group_by(int) %>%
-    head(2)
-  expect_s3_class(b4, "arrow_dplyr_query")
-  expect_equal(
-    as.data.frame(b4),
-    expected %>%
-      rename(strng = chr) %>%
-      group_by(int)
-  )
-
-  expect_equal(
-    batch %>%
+  compare_dplyr_binding(
+    .input %>%
       select(int, strng = chr) %>%
       filter(int > 5) %>%
+      group_by(int) %>%
       head(2) %>%
-      mutate(twice = int * 2) %>%
       collect(),
-    expected %>%
-      rename(strng = chr) %>%
-      mutate(twice = int * 2)
+    tbl
   )
 
   # This would fail if we evaluated head() after filter()
-  expect_equal(
-    batch %>%
+  compare_dplyr_binding(
+    .input %>%
       select(int, strng = chr) %>%
+      arrange(int) %>%
       head(2) %>%
       filter(int > 5) %>%
+      mutate(twice = int * 2) %>%
       collect(),
-    expected %>%
-      rename(strng = chr) %>%
-      filter(FALSE)
+    tbl
   )
 })
 
@@ -240,8 +210,7 @@ test_that("arrange then head returns the right data (ARROW-14162)", {
       arrange(mpg, disp) %>%
       head(4) %>%
       collect(),
-    mtcars,
-    ignore_attr = "row.names"
+    tibble::as_tibble(mtcars)
   )
 })
 
@@ -252,44 +221,30 @@ test_that("arrange then tail returns the right data", {
       arrange(mpg, disp) %>%
       tail(4) %>%
       collect(),
-    mtcars,
-    ignore_attr = "row.names"
+    tibble::as_tibble(mtcars)
   )
 })
 
 test_that("tail", {
-  batch <- record_batch(tbl)
-
-  b2 <- batch %>%
-    select(int, chr) %>%
-    filter(int > 5) %>%
-    arrange(int) %>%
-    tail(2)
-
-  expect_s3_class(b2, "arrow_dplyr_query")
-  expected <- tail(tbl[tbl$int > 5 & !is.na(tbl$int), c("int", "chr")], 2)
-  expect_equal(as.data.frame(b2), expected)
-
-  b3 <- batch %>%
-    select(int, strng = chr) %>%
-    filter(int > 5) %>%
-    arrange(int) %>%
-    tail(2)
-  expect_s3_class(b3, "arrow_dplyr_query")
-  expect_equal(as.data.frame(b3), set_names(expected, c("int", "strng")))
-
-  b4 <- batch %>%
-    select(int, strng = chr) %>%
-    filter(int > 5) %>%
-    group_by(int) %>%
-    arrange(int) %>%
-    tail(2)
-  expect_s3_class(b4, "arrow_dplyr_query")
-  expect_equal(
-    as.data.frame(b4),
-    expected %>%
-      rename(strng = chr) %>%
-      group_by(int)
+  # With sorting
+  compare_dplyr_binding(
+    .input %>%
+      select(int, chr) %>%
+      filter(int < 5) %>%
+      arrange(int) %>%
+      tail(2) %>%
+      collect(),
+    tbl
+  )
+  # Without sorting: table order is implicit, and we can compute the filter
+  # row length, so the query can use Fetch with offset
+  compare_dplyr_binding(
+    .input %>%
+      select(int, chr) %>%
+      filter(int < 5) %>%
+      tail(2) %>%
+      collect(),
+    tbl
   )
 })
 
@@ -508,7 +463,6 @@ test_that("show_exec_plan(), show_query() and explain()", {
       show_exec_plan(),
     regexp = paste0(
       "ExecPlan with .* nodes:.*", # boiler plate for ExecPlan
-      "ProjectNode.*", # output columns
       "GroupByNode.*", # the group_by statement
       "keys=.*lgl.*", # the key for the aggregations
       "aggregates=.*hash_mean.*avg.*", # the aggregations
@@ -549,7 +503,7 @@ test_that("show_exec_plan(), show_query() and explain()", {
       show_exec_plan(),
     regexp = paste0(
       "ExecPlan with .* nodes:.*", # boiler plate for ExecPlan
-      "OrderBySinkNode.*wt.*DESC.*", # arrange goes via the OrderBy sink node
+      "OrderBy.*wt.*DESC.*", # arrange goes via the OrderBy node
       "FilterNode.*", # filter node
       "TableSourceNode.*" # entry point
     )
@@ -557,14 +511,19 @@ test_that("show_exec_plan(), show_query() and explain()", {
 
   # printing the ExecPlan for a nested query would currently force the
   # evaluation of the inner one(s), which we want to avoid => no output
-  expect_warning(
+  expect_output(
     mtcars %>%
       arrow_table() %>%
       filter(mpg > 20) %>%
-      arrange(desc(wt)) %>%
       head(3) %>%
       show_exec_plan(),
-    "The `ExecPlan` cannot be printed for a nested query."
+    paste0(
+      "ExecPlan with 4 nodes:.*",
+      "3:SinkNode.*",
+      "2:FetchNode.offset=0 count=3.*",
+      "1:FilterNode.filter=.mpg > 20.*",
+      "0:TableSourceNode.*"
+    )
   )
 })
 
@@ -598,8 +557,8 @@ test_that("compute() on a grouped query returns a Table with groups in metadata"
     group_by(int) %>%
     compute()
   expect_r6_class(tab1, "Table")
-  expect_equal(
-    as.data.frame(tab1),
+  expect_equal_data_frame(
+    tab1,
     tbl %>%
       group_by(int)
   )
@@ -662,19 +621,9 @@ test_that("Scalars in expressions match the type of the field, if possible", {
     0
   )
 
-  # int == string, this works in dplyr and here too
-  expect_output(
-    tab %>%
-      filter(int == "5") %>%
-      show_exec_plan(),
-    "int == 5",
-    fixed = TRUE
-  )
-  expect_equal(
-    tab %>%
-      filter(int == "5") %>%
-      nrow(),
-    1
+  # int == string, errors starting in dplyr 1.1.0
+  expect_snapshot_warning(
+    tab %>% filter(int == "5")
   )
 
   # Strings automatically parsed to date/timestamp
@@ -690,6 +639,12 @@ test_that("Scalars in expressions match the type of the field, if possible", {
       collect(),
     tbl_with_datetime
   )
+
+  # ARROW-18401: These will error if the system timezone is not valid. A PR was
+  # submitted to fix this docker image upstream; this skip can be removed after
+  # it merges.
+  # https://github.com/r-hub/rhub-linux-builders/pull/65
+  skip_if(identical(Sys.timezone(), "/UTC"))
 
   expect_output(
     tab %>%
@@ -717,4 +672,91 @@ test_that("Scalars in expressions match the type of the field, if possible", {
     ) %>%
     collect()
   expect_equal(result$tpc_h_1, result$as_dbl)
+})
+
+test_that("Can use nested field refs", {
+  nested_data <- tibble(int = 1:5, df_col = tibble(a = 6:10, b = 11:15))
+
+  compare_dplyr_binding(
+    .input %>%
+      mutate(
+        nested = df_col$a,
+        times2 = df_col$a * 2
+      ) %>%
+      filter(nested > 7) %>%
+      collect(),
+    nested_data
+  )
+
+  compare_dplyr_binding(
+    .input %>%
+      mutate(
+        nested = df_col$a,
+        times2 = df_col$a * 2
+      ) %>%
+      filter(nested > 7) %>%
+      summarize(sum(times2)) %>%
+      collect(),
+    nested_data
+  )
+})
+
+test_that("Can use nested field refs with Dataset", {
+  skip_if_not_available("dataset")
+  # Now with Dataset: make sure column pushdown in ScanNode works
+  nested_data <- tibble(int = 1:5, df_col = tibble(a = 6:10, b = 11:15))
+  tf <- tempfile()
+  dir.create(tf)
+  write_dataset(nested_data, tf)
+  ds <- open_dataset(tf)
+
+  expect_equal(
+    ds %>%
+      mutate(
+        nested = df_col$a,
+        times2 = df_col$a * 2
+      ) %>%
+      filter(nested > 7) %>%
+      collect(),
+    nested_data %>%
+      mutate(
+        nested = df_col$a,
+        times2 = df_col$a * 2
+      ) %>%
+      filter(nested > 7)
+  )
+  # Issue #34519: error when projecting same name, but only on file dataset
+  expect_equal(
+    ds %>%
+      mutate(int = as.numeric(int)) %>%
+      collect(),
+    nested_data %>%
+      mutate(int = as.numeric(int)) %>%
+      collect()
+  )
+})
+
+test_that("Use struct_field for $ on non-field-ref", {
+  compare_dplyr_binding(
+    .input %>%
+      mutate(
+        df_col = tibble(i = int, d = dbl)
+      ) %>%
+      transmute(
+        int2 = df_col$i,
+        dbl2 = df_col$d
+      ) %>%
+      collect(),
+    example_data
+  )
+})
+
+test_that("nested field ref error handling", {
+  expect_error(
+    example_data %>%
+      arrow_table() %>%
+      mutate(x = int$nested) %>%
+      compute(),
+    "No match"
+  )
 })

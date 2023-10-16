@@ -24,6 +24,7 @@ import weakref
 import numpy as np
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 
 @pytest.mark.parametrize(['value', 'ty', 'klass'], [
@@ -67,6 +68,8 @@ import pyarrow as pa
 ])
 def test_basics(value, ty, klass):
     s = pa.scalar(value, type=ty)
+    s.validate()
+    s.validate(full=True)
     assert isinstance(s, klass)
     assert s.as_py() == value
     assert s == pa.scalar(value, type=ty)
@@ -90,6 +93,14 @@ def test_basics(value, ty, klass):
     assert wr() is not None
     del s
     assert wr() is None
+
+
+def test_invalid_scalar():
+    s = pc.cast(pa.scalar(b"\xff"), pa.string(), safe=False)
+    s.validate()
+    with pytest.raises(ValueError,
+                       match="string scalar contains invalid UTF8 data"):
+        s.validate(full=True)
 
 
 def test_null_singleton():
@@ -244,15 +255,34 @@ def test_time_from_datetime_time():
 @pytest.mark.parametrize(['value', 'time_type'], [
     (1, pa.time32("s")),
     (2**30, pa.time32("s")),
+    (None, pa.time32("s")),
     (1, pa.time32("ms")),
     (2**30, pa.time32("ms")),
+    (None, pa.time32("ms")),
     (1, pa.time64("us")),
     (2**62, pa.time64("us")),
+    (None, pa.time64("us")),
     (1, pa.time64("ns")),
     (2**62, pa.time64("ns")),
+    (None, pa.time64("ns")),
+    (1, pa.date32()),
+    (2**30, pa.date32()),
+    (None, pa.date32()),
+    (1, pa.date64()),
+    (2**62, pa.date64()),
+    (None, pa.date64()),
+    (1, pa.timestamp("ns")),
+    (2**62, pa.timestamp("ns")),
+    (None, pa.timestamp("ns")),
+    (1, pa.duration("ns")),
+    (2**62, pa.duration("ns")),
+    (None, pa.duration("ns")),
+    ((1, 2, -3), pa.month_day_nano_interval()),
+    (None, pa.month_day_nano_interval()),
 ])
-def test_time_values(value, time_type):
+def test_temporal_values(value, time_type: pa.DataType):
     time_scalar = pa.scalar(value, type=time_type)
+    time_scalar.validate(full=True)
     assert time_scalar.value == value
 
 
@@ -263,6 +293,35 @@ def test_cast():
     assert val.cast('string') == pa.scalar('5', type='string')
     with pytest.raises(ValueError):
         pa.scalar('foo').cast('int32')
+
+
+def test_cast_timestamp_to_string():
+    # GH-35370
+    pytest.importorskip("pytz")
+    import pytz
+    dt = datetime.datetime(2000, 1, 1, 0, 0, 0, tzinfo=pytz.utc)
+    ts = pa.scalar(dt, type=pa.timestamp("ns", tz="UTC"))
+    assert ts.cast(pa.string()) == pa.scalar('2000-01-01 00:00:00.000000000Z')
+
+
+def test_cast_float_to_int():
+    # GH-35040
+    float_scalar = pa.scalar(1.5, type=pa.float64())
+    unsafe_cast = float_scalar.cast(pa.int64(), safe=False)
+    expected_unsafe_cast = pa.scalar(1, type=pa.int64())
+    assert unsafe_cast == expected_unsafe_cast
+    with pytest.raises(pa.ArrowInvalid):
+        float_scalar.cast(pa.int64())  # verify default is safe cast
+
+
+def test_cast_int_to_float():
+    # GH-34901
+    int_scalar = pa.scalar(18014398509481983, type=pa.int64())
+    unsafe_cast = int_scalar.cast(pa.float64(), safe=False)
+    expected_unsafe_cast = pa.scalar(18014398509481983.0, type=pa.float64())
+    assert unsafe_cast == expected_unsafe_cast
+    with pytest.raises(pa.ArrowInvalid):
+        int_scalar.cast(pa.float64())  # verify default is safe cast
 
 
 @pytest.mark.pandas
@@ -651,6 +710,27 @@ def test_dictionary():
         assert restored.equals(s)
 
 
+def test_run_end_encoded():
+    run_ends = [3, 5, 10, 12, 19]
+    values = [1, 2, 1, None, 3]
+    arr = pa.RunEndEncodedArray.from_arrays(run_ends, values)
+
+    scalar = arr[0]
+    assert isinstance(scalar, pa.RunEndEncodedScalar)
+    assert isinstance(scalar.value, pa.Int64Scalar)
+    assert scalar.value == pa.array(values)[0]
+    assert scalar.as_py() == 1
+
+    # null -> .value is still a scalar, as_py returns None
+    scalar = arr[10]
+    assert isinstance(scalar.value, pa.Int64Scalar)
+    assert scalar.as_py() is None
+
+    # constructing a scalar directly doesn't work yet
+    with pytest.raises(NotImplementedError):
+        pa.scalar(1, pa.run_end_encoded(pa.int64(), pa.int64()))
+
+
 def test_union():
     # sparse
     arr = pa.UnionArray.from_sparse(
@@ -661,6 +741,7 @@ def test_union():
         ]
     )
     for s in arr:
+        s.validate(full=True)
         assert isinstance(s, pa.UnionScalar)
         assert s.type.equals(arr.type)
         assert s.is_valid is True
@@ -686,6 +767,7 @@ def test_union():
         ]
     )
     for s in arr:
+        s.validate(full=True)
         assert isinstance(s, pa.UnionScalar)
         assert s.type.equals(arr.type)
         assert s.is_valid is True

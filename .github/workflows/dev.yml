@@ -94,10 +94,11 @@ jobs:
       - name: Install .NET
         uses: actions/setup-dotnet@v2
         with:
-          dotnet-version: '6.0.x'
+          dotnet-version: '7.0.x'
       - name: Install Dependencies
         shell: bash
         run: |
+          gem install test-unit
           pip install cython setuptools six pytest jira
       - name: Run Release Test
         env:

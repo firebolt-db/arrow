@@ -25,6 +25,7 @@
 #include <unordered_set>
 
 #include <flatbuffers/flatbuffers.h>
+#include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
 
 #include "arrow/array.h"
@@ -52,6 +53,7 @@
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/io_util.h"
 #include "arrow/util/key_value_metadata.h"
+#include "arrow/util/ubsan.h"
 
 #include "generated/Message_generated.h"  // IWYU pragma: keep
 
@@ -234,7 +236,7 @@ class TestSchemaMetadata : public ::testing::Test {
     io::BufferReader reader(buffer);
     DictionaryMemo in_memo;
     ASSERT_OK_AND_ASSIGN(auto actual_schema, ReadSchema(&reader, &in_memo));
-    AssertSchemaEqual(schema, *actual_schema);
+    AssertSchemaEqual(schema, *actual_schema, /* check_metadata= */ true);
   }
 };
 
@@ -257,6 +259,15 @@ TEST_F(TestSchemaMetadata, PrimitiveFields) {
   CheckSchemaRoundtrip(schema);
 }
 
+TEST_F(TestSchemaMetadata, PrimitiveFieldsWithKeyValueMetadata) {
+  auto f1 = field("f1", std::make_shared<Int64Type>(), false,
+                  key_value_metadata({"k1"}, {"v1"}));
+  auto f2 = field("f2", std::make_shared<StringType>(), true,
+                  key_value_metadata({"k2"}, {"v2"}));
+  Schema schema({f1, f2});
+  CheckSchemaRoundtrip(schema);
+}
+
 TEST_F(TestSchemaMetadata, NestedFields) {
   auto type = list(int32());
   auto f0 = field("f0", type);
@@ -266,6 +277,29 @@ TEST_F(TestSchemaMetadata, NestedFields) {
   auto f1 = field("f1", type2);
 
   Schema schema({f0, f1});
+  CheckSchemaRoundtrip(schema);
+}
+
+// Verify that nullable=false is well-preserved for child fields of map type.
+TEST_F(TestSchemaMetadata, MapField) {
+  auto key = field("key", int32(), false);
+  auto item = field("value", int32(), false);
+  auto f0 = field("f0", std::make_shared<MapType>(key, item));
+  Schema schema({f0});
+  CheckSchemaRoundtrip(schema);
+}
+
+// Verify that key value metadata is well-preserved for child fields of nested type.
+TEST_F(TestSchemaMetadata, NestedFieldsWithKeyValueMetadata) {
+  auto metadata = key_value_metadata({"foo"}, {"bar"});
+  auto inner_field = field("inner", int32(), false, metadata);
+  auto f0 = field("f0", list(inner_field), false, metadata);
+  auto f1 = field("f1", struct_({inner_field}), false, metadata);
+  auto f2 = field("f2",
+                  std::make_shared<MapType>(field("key", int32(), false, metadata),
+                                            field("value", int32(), false, metadata)),
+                  false, metadata);
+  Schema schema({f0, f1, f2});
   CheckSchemaRoundtrip(schema);
 }
 
@@ -732,6 +766,69 @@ TEST_F(TestWriteRecordBatch, WriteWithCompression) {
     IpcWriteOptions write_options = IpcWriteOptions::Defaults();
     ASSERT_OK_AND_ASSIGN(write_options.codec, util::Codec::Create(codec));
     ASSERT_RAISES(Invalid, SerializeRecordBatch(*batch, write_options));
+  }
+}
+
+TEST_F(TestWriteRecordBatch, WriteWithCompressionAndMinSavings) {
+  // A small batch that's known to be compressible
+  auto batch = RecordBatchFromJSON(schema({field("n", int64())}), R"([
+    {"n":0},{"n":1},{"n":2},{"n":3},{"n":4},
+    {"n":5},{"n":6},{"n":7},{"n":8},{"n":9}])");
+
+  auto prefixed_size = [](const Buffer& buffer) -> int64_t {
+    if (buffer.size() < int64_t(sizeof(int64_t))) return 0;
+    return bit_util::FromLittleEndian(util::SafeLoadAs<int64_t>(buffer.data()));
+  };
+  auto content_size = [](const Buffer& buffer) -> int64_t {
+    return buffer.size() - sizeof(int64_t);
+  };
+
+  for (auto codec : {Compression::LZ4_FRAME, Compression::ZSTD}) {
+    if (!util::Codec::IsAvailable(codec)) {
+      continue;
+    }
+
+    auto write_options = IpcWriteOptions::Defaults();
+    ASSERT_OK_AND_ASSIGN(write_options.codec, util::Codec::Create(codec));
+    auto read_options = IpcReadOptions::Defaults();
+
+    IpcPayload payload;
+    ASSERT_OK(GetRecordBatchPayload(*batch, write_options, &payload));
+    ASSERT_EQ(payload.body_buffers.size(), 2);
+    // Compute the savings when body buffers are compressed unconditionally. We also
+    // validate that our test batch is indeed compressible.
+    const int64_t uncompressed_size = prefixed_size(*payload.body_buffers[1]);
+    const int64_t compressed_size = content_size(*payload.body_buffers[1]);
+    ASSERT_LT(compressed_size, uncompressed_size);
+    ASSERT_GT(compressed_size, 0);
+    const double expected_savings =
+        1.0 - static_cast<double>(compressed_size) / uncompressed_size;
+
+    // Using the known savings % as the minimum should yield the same outcome.
+    write_options.min_space_savings = expected_savings;
+    payload = IpcPayload();
+    ASSERT_OK(GetRecordBatchPayload(*batch, write_options, &payload));
+    ASSERT_EQ(payload.body_buffers.size(), 2);
+    ASSERT_EQ(prefixed_size(*payload.body_buffers[1]), uncompressed_size);
+    ASSERT_EQ(content_size(*payload.body_buffers[1]), compressed_size);
+    CheckRoundtrip(*batch, write_options, read_options);
+
+    // Slightly bump the threshold. The body buffer should now be prefixed with -1 and its
+    // content left uncompressed.
+    write_options.min_space_savings = std::nextafter(expected_savings, 1.0);
+    payload = IpcPayload();
+    ASSERT_OK(GetRecordBatchPayload(*batch, write_options, &payload));
+    ASSERT_EQ(payload.body_buffers.size(), 2);
+    ASSERT_EQ(prefixed_size(*payload.body_buffers[1]), -1);
+    ASSERT_EQ(content_size(*payload.body_buffers[1]), uncompressed_size);
+    CheckRoundtrip(*batch, write_options, read_options);
+
+    for (double out_of_range : {std::nextafter(1.0, 2.0), std::nextafter(0.0, -1.0)}) {
+      write_options.min_space_savings = out_of_range;
+      EXPECT_RAISES_WITH_MESSAGE_THAT(
+          Invalid, ::testing::StartsWith("Invalid: min_space_savings not in range [0,1]"),
+          SerializeRecordBatch(*batch, write_options));
+    }
   }
 }
 
@@ -1913,54 +2010,6 @@ TEST_F(TestFileFormatGeneratorCoalesced, Errors) {
                              reader->GetRecordBatchGenerator(/*coalesce=*/true));
 }
 
-class TrackedRandomAccessFile : public io::RandomAccessFile {
- public:
-  explicit TrackedRandomAccessFile(io::RandomAccessFile* delegate)
-      : delegate_(delegate) {}
-
-  Status Close() override { return delegate_->Close(); }
-  bool closed() const override { return delegate_->closed(); }
-  Result<int64_t> Tell() const override { return delegate_->Tell(); }
-  Status Seek(int64_t position) override { return delegate_->Seek(position); }
-  Result<int64_t> Read(int64_t nbytes, void* out) override {
-    ARROW_ASSIGN_OR_RAISE(auto position, delegate_->Tell());
-    SaveReadRange(position, nbytes);
-    return delegate_->Read(nbytes, out);
-  }
-  Result<std::shared_ptr<Buffer>> Read(int64_t nbytes) override {
-    ARROW_ASSIGN_OR_RAISE(auto position, delegate_->Tell());
-    SaveReadRange(position, nbytes);
-    return delegate_->Read(nbytes);
-  }
-  bool supports_zero_copy() const override { return delegate_->supports_zero_copy(); }
-  Result<int64_t> GetSize() override { return delegate_->GetSize(); }
-  Result<int64_t> ReadAt(int64_t position, int64_t nbytes, void* out) override {
-    SaveReadRange(position, nbytes);
-    return delegate_->ReadAt(position, nbytes, out);
-  }
-  Result<std::shared_ptr<Buffer>> ReadAt(int64_t position, int64_t nbytes) override {
-    SaveReadRange(position, nbytes);
-    return delegate_->ReadAt(position, nbytes);
-  }
-  Future<std::shared_ptr<Buffer>> ReadAsync(const io::IOContext& io_context,
-                                            int64_t position, int64_t nbytes) override {
-    SaveReadRange(position, nbytes);
-    return delegate_->ReadAsync(io_context, position, nbytes);
-  }
-
-  int64_t num_reads() const { return read_ranges_.size(); }
-
-  const std::vector<io::ReadRange>& get_read_ranges() const { return read_ranges_; }
-
- private:
-  io::RandomAccessFile* delegate_;
-  std::vector<io::ReadRange> read_ranges_;
-
-  void SaveReadRange(int64_t offset, int64_t length) {
-    read_ranges_.emplace_back(io::ReadRange{offset, length});
-  }
-};
-
 TEST(TestRecordBatchStreamReader, EmptyStreamWithDictionaries) {
   // ARROW-6006
   auto f0 = arrow::field("f0", arrow::dictionary(arrow::int8(), arrow::utf8()));
@@ -2801,19 +2850,21 @@ void GetReadRecordBatchReadRanges(
   auto buffer = MakeBooleanInt32Int64File(num_rows, /*num_batches=*/1);
 
   io::BufferReader buffer_reader(buffer);
-  TrackedRandomAccessFile tracked(&buffer_reader);
+  std::unique_ptr<io::TrackedRandomAccessFile> tracked =
+      io::TrackedRandomAccessFile::Make(&buffer_reader);
 
   auto read_options = IpcReadOptions::Defaults();
   // if empty, return all fields
   read_options.included_fields = included_fields;
-  ASSERT_OK_AND_ASSIGN(auto reader, RecordBatchFileReader::Open(&tracked, read_options));
+  ASSERT_OK_AND_ASSIGN(auto reader,
+                       RecordBatchFileReader::Open(tracked.get(), read_options));
   ASSERT_OK_AND_ASSIGN(auto out_batch, reader->ReadRecordBatch(0));
 
   ASSERT_EQ(out_batch->num_rows(), num_rows);
   ASSERT_EQ(out_batch->num_columns(),
             included_fields.empty() ? 3 : included_fields.size());
 
-  auto read_ranges = tracked.get_read_ranges();
+  auto read_ranges = tracked->get_read_ranges();
 
   // there are 3 read IOs before reading body:
   // 1) read magic and footer length IO
@@ -2917,7 +2968,7 @@ class PreBufferingTest : public ::testing::TestWithParam<bool> {
 
   void OpenReader() {
     buffer_reader_ = std::make_shared<io::BufferReader>(file_buffer_);
-    tracked_ = std::make_shared<TrackedRandomAccessFile>(buffer_reader_.get());
+    tracked_ = io::TrackedRandomAccessFile::Make(buffer_reader_.get());
     auto read_options = IpcReadOptions::Defaults();
     if (ReadsArePlugged()) {
       // This will ensure that all reads get globbed together into one large read
@@ -2994,7 +3045,7 @@ class PreBufferingTest : public ::testing::TestWithParam<bool> {
   std::vector<std::shared_ptr<RecordBatch>> batches_;
   std::shared_ptr<Buffer> file_buffer_;
   std::shared_ptr<io::BufferReader> buffer_reader_;
-  std::shared_ptr<TrackedRandomAccessFile> tracked_;
+  std::shared_ptr<io::TrackedRandomAccessFile> tracked_;
   std::shared_ptr<RecordBatchFileReader> reader_;
 };
 
