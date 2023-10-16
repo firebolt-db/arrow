@@ -39,6 +39,8 @@ rm -rf ${build_dir}
 
 echo "=== Building Arrow C++ libraries ==="
 install_dir=${build_dir}/cpp-install
+: ${ARROW_ACERO:=ON}
+export ARROW_ACERO
 : ${ARROW_BUILD_TESTS:=ON}
 : ${ARROW_DATASET:=ON}
 export ARROW_DATASET
@@ -47,8 +49,6 @@ export ARROW_GANDIVA
 : ${ARROW_ORC:=ON}
 export ARROW_ORC
 : ${ARROW_PARQUET:=ON}
-: ${ARROW_PLASMA:=ON}
-export ARROW_PLASMA
 : ${ARROW_S3:=ON}
 : ${ARROW_USE_CCACHE:=OFF}
 : ${CMAKE_BUILD_TYPE:=Release}
@@ -56,7 +56,7 @@ export ARROW_PLASMA
 
 if [ "${ARROW_USE_CCACHE}" == "ON" ]; then
   echo "=== ccache statistics before build ==="
-  ccache -s
+  ccache -sv 2>/dev/null || ccache -s
 fi
 
 export ARROW_TEST_DATA="${arrow_dir}/testing/data"
@@ -67,6 +67,7 @@ mkdir -p "${build_dir}/cpp"
 pushd "${build_dir}/cpp"
 
 cmake \
+  -DARROW_ACERO=${ARROW_ACERO} \
   -DARROW_BUILD_SHARED=OFF \
   -DARROW_BUILD_TESTS=${ARROW_BUILD_TESTS} \
   -DARROW_CSV=${ARROW_DATASET} \
@@ -76,7 +77,6 @@ cmake \
   -DARROW_GANDIVA_STATIC_LIBSTDCPP=ON \
   -DARROW_ORC=${ARROW_ORC} \
   -DARROW_PARQUET=${ARROW_PARQUET} \
-  -DARROW_PLASMA=${ARROW_PLASMA} \
   -DARROW_S3=${ARROW_S3} \
   -DARROW_USE_CCACHE=${ARROW_USE_CCACHE} \
   -DAWSSDK_SOURCE=BUNDLED \
@@ -97,7 +97,7 @@ if [ "${ARROW_BUILD_TESTS}" == "ON" ]; then
   # MinIO is required
   exclude_tests="arrow-s3fs-test"
   # unstable
-  exclude_tests="${exclude_tests}|arrow-compute-hash-join-node-test"
+  exclude_tests="${exclude_tests}|arrow-acero-hash-join-node-test"
   ctest \
     --exclude-regex "${exclude_tests}" \
     --label-regex unittest \
@@ -108,7 +108,7 @@ fi
 
 popd
 
-
+export JAVA_JNI_CMAKE_ARGS="-DProtobuf_ROOT=${build_dir}/cpp/protobuf_ep-install"
 ${arrow_dir}/ci/scripts/java_jni_build.sh \
   ${arrow_dir} \
   ${install_dir} \
@@ -117,7 +117,7 @@ ${arrow_dir}/ci/scripts/java_jni_build.sh \
 
 if [ "${ARROW_USE_CCACHE}" == "ON" ]; then
   echo "=== ccache statistics after build ==="
-  ccache -s
+  ccache -sv 2>/dev/null || ccache -s
 fi
 
 
@@ -125,6 +125,7 @@ echo "=== Checking shared dependencies for libraries ==="
 pushd ${dist_dir}
 archery linking check-dependencies \
   --allow CoreFoundation \
+  --allow Security \
   --allow libSystem \
   --allow libarrow_cdata_jni \
   --allow libarrow_dataset_jni \
@@ -133,11 +134,10 @@ archery linking check-dependencies \
   --allow libcurl \
   --allow libgandiva_jni \
   --allow libncurses \
-  --allow libplasma_java \
+  --allow libobjc \
   --allow libz \
   libarrow_cdata_jni.dylib \
   libarrow_dataset_jni.dylib \
   libarrow_orc_jni.dylib \
-  libgandiva_jni.dylib \
-  libplasma_java.dylib
+  libgandiva_jni.dylib
 popd

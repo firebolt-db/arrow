@@ -422,6 +422,45 @@ test_that("Write a CSV file with invalid batch size", {
   )
 })
 
+test_that("Write a CSV with custom NA value", {
+  tbl_out1 <- write_csv_arrow(tbl_no_dates, csv_file, na = "NULL_VALUE")
+  expect_true(file.exists(csv_file))
+  expect_identical(tbl_out1, tbl_no_dates)
+
+  csv_contents <- readLines(csv_file)
+  expect_true(any(grepl("NULL_VALUE", csv_contents)))
+
+  tbl_in1 <- read_csv_arrow(csv_file, na = "NULL_VALUE")
+  expect_identical(tbl_in1, tbl_no_dates)
+
+  # Also can use null_value in CsvWriteOptions
+  tbl_out1 <- write_csv_arrow(tbl_no_dates, csv_file,
+    write_options = CsvWriteOptions$create(null_string = "another_null")
+  )
+  csv_contents <- readLines(csv_file)
+  expect_true(any(grepl("another_null", csv_contents)))
+
+  tbl_in1 <- read_csv_arrow(csv_file, na = "another_null")
+  expect_identical(tbl_in1, tbl_no_dates)
+
+  # Also can use empty string
+  write_csv_arrow(tbl_no_dates, csv_file, na = "")
+  expect_true(file.exists(csv_file))
+
+  csv_contents <- readLines(csv_file)
+  expect_true(any(grepl(",,", csv_contents)))
+
+  tbl_in1 <- read_csv_arrow(csv_file)
+  expect_identical(tbl_in1, tbl_no_dates)
+})
+
+test_that("Write a CSV file with invalid null value", {
+  expect_error(
+    write_csv_arrow(tbl_no_dates, csv_file, na = "MY\"VAL"),
+    regexp = "must not contain quote characters"
+  )
+})
+
 test_that("time mapping work as expected (ARROW-13624)", {
   tbl <- tibble::tibble(
     dt = as.POSIXct(c("2020-07-20 16:20", NA), tz = "UTC"),
@@ -623,5 +662,65 @@ test_that("Shows an error message when trying to read a timestamp with time zone
   expect_error(
     read_csv_arrow(csv_file, col_types = "T", col_names = "time", skip = 1),
     "CSV conversion error to timestamp\\[ns\\]: expected no zone offset in"
+  )
+})
+
+test_that("CSV reading/parsing/convert options can be passed in as lists", {
+  tf <- tempfile()
+  on.exit(unlink(tf))
+
+  writeLines('"x"\nNA\nNA\n"NULL"\n\n"foo"\n', tf)
+
+  tab1 <- read_csv_arrow(
+    tf,
+    convert_options = list(null_values = c("NA", "NULL"), strings_can_be_null = TRUE),
+    parse_options = list(ignore_empty_lines = FALSE),
+    read_options = list(skip_rows = 1L)
+  )
+
+  tab2 <- read_csv_arrow(
+    tf,
+    convert_options = CsvConvertOptions$create(null_values = c(NA, "NA", "NULL"), strings_can_be_null = TRUE),
+    parse_options = CsvParseOptions$create(ignore_empty_lines = FALSE),
+    read_options = CsvReadOptions$create(skip_rows = 1L)
+  )
+
+  expect_equal(tab1, tab2)
+})
+
+test_that("Read literal data directly", {
+  expected <- tibble::tibble(x = c(1L, 3L), y = c(2L, 4L))
+
+  expect_identical(read_csv_arrow(I("x,y\n1,2\n3,4")), expected)
+  expect_identical(read_csv_arrow(I("x,y\r1,2\r3,4")), expected)
+  expect_identical(read_csv_arrow(I("x,y\n\r1,2\n\r3,4")), expected)
+  expect_identical(read_csv_arrow(charToRaw("x,y\n1,2\n3,4")), expected)
+  expect_identical(read_csv_arrow(I(charToRaw("x,y\n1,2\n3,4"))), expected)
+  expect_identical(read_csv_arrow(I(c("x,y", "1,2", "3,4"))), expected)
+})
+
+test_that("skip_rows and skip_rows_after_names option", {
+  txt_raw <- charToRaw(paste0(c("a", 1:4), collapse = "\n"))
+
+  expect_identical(
+    read_csv_arrow(
+      txt_raw,
+      read_options = list(skip_rows_after_names = 1)
+    ),
+    tibble::tibble(a = 2:4)
+  )
+  expect_identical(
+    read_csv_arrow(
+      txt_raw,
+      read_options = list(skip_rows_after_names = 10)
+    ),
+    tibble::tibble(a = vctrs::unspecified())
+  )
+  expect_identical(
+    read_csv_arrow(
+      txt_raw,
+      read_options = list(skip = 1, skip_rows_after_names = 1)
+    ),
+    tibble::tibble(`1` = 3:4)
   )
 })

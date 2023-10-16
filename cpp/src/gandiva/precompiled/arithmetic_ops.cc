@@ -494,6 +494,18 @@ SIGN(float32)
 SIGN(float64)
 
 #undef SIGN
+
+#define ABS(TYPE) \
+  FORCE_INLINE    \
+  gdv_##TYPE abs_##TYPE(gdv_##TYPE in1) { return static_cast<gdv_##TYPE>(std::abs(in1)); }
+
+ABS(int32)
+ABS(int64)
+ABS(float32)
+ABS(float64)
+
+#undef ABS
+
 #define CEILING(TYPE) \
   FORCE_INLINE        \
   gdv_##TYPE ceiling_##TYPE(gdv_##TYPE in1) { return static_cast<gdv_##TYPE>(ceil(in1)); }
@@ -511,6 +523,21 @@ FLOOR(float32)
 FLOOR(float64)
 
 #undef FLOOR
+#define SQRT(TYPE)                              \
+  FORCE_INLINE                                  \
+  gdv_float64 sqrt_##TYPE(gdv_##TYPE in1) {     \
+    if (in1 < 0) {                              \
+      return NAN;                               \
+    }                                           \
+    return static_cast<gdv_float64>(sqrt(in1)); \
+  }
+
+SQRT(int32)
+SQRT(int64)
+SQRT(float32)
+SQRT(float64)
+
+#undef SQRT
 
 #undef NUMERIC_FUNCTION
 #undef NUMERIC_TYPES

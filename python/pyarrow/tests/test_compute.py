@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from datetime import datetime
+import datetime
 from functools import lru_cache, partial
 import inspect
 import itertools
@@ -35,6 +35,7 @@ except ImportError:
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from pyarrow.lib import ArrowNotImplementedError
 
 all_array_types = [
     ('bool', [True, False, False, True, True]),
@@ -133,6 +134,7 @@ def test_option_class_equality():
         pc.CountOptions(),
         pc.DayOfWeekOptions(count_from_zero=False, week_start=0),
         pc.DictionaryEncodeOptions(),
+        pc.RunEndEncodeOptions(),
         pc.ElementWiseAggregateOptions(skip_nulls=True),
         pc.ExtractRegexOptions("pattern"),
         pc.FilterOptions(),
@@ -157,6 +159,7 @@ def test_option_class_equality():
         pc.ReplaceSliceOptions(0, 1, "a"),
         pc.ReplaceSubstringOptions("a", "b"),
         pc.RoundOptions(2, "towards_infinity"),
+        pc.RoundBinaryOptions("towards_infinity"),
         pc.RoundTemporalOptions(1, "second", week_starts_monday=True),
         pc.RoundToMultipleOptions(100, "towards_infinity"),
         pc.ScalarAggregateOptions(),
@@ -1588,6 +1591,23 @@ def test_round_to_multiple():
             pc.round_to_multiple(values, multiple=multiple)
 
 
+def test_round_binary():
+    values = [123.456, 234.567, 345.678, 456.789, 123.456, 234.567, 345.678]
+    scales = pa.array([-3, -2, -1, 0, 1, 2, 3], pa.int32())
+    expected = pa.array(
+        [0, 200, 350, 457, 123.5, 234.57, 345.678], pa.float64())
+    assert pc.round_binary(values, scales) == expected
+
+    expect_zero = pa.scalar(0, pa.float64())
+    expect_inf = pa.scalar(10, pa.float64())
+    scale = pa.scalar(-1, pa.int32())
+
+    assert pc.round_binary(
+        5, scale, round_mode="half_towards_zero") == expect_zero
+    assert pc.round_binary(
+        5, scale, round_mode="half_towards_infinity") == expect_inf
+
+
 def test_is_null():
     arr = pa.array([1, 2, 3, None])
     result = arr.is_null()
@@ -1615,6 +1635,23 @@ def test_is_null():
     result = arr.is_null(nan_is_null=True)
     expected = pa.array([False, False, False, True, True])
     assert result.equals(expected)
+
+
+def test_is_nan():
+    arr = pa.array([1, 2, 3, None, np.nan])
+    result = arr.is_nan()
+    expected = pa.array([False, False, False, None, True])
+    assert result.equals(expected)
+
+    arr = pa.array(["1", "2", None], type=pa.string())
+    with pytest.raises(
+            ArrowNotImplementedError, match="has no kernel matching input types"):
+        _ = arr.is_nan()
+
+    with pytest.raises(
+            ArrowNotImplementedError, match="has no kernel matching input types"):
+        arr = pa.array([b'a', b'bb', None], type=pa.large_binary())
+        _ = arr.is_nan()
 
 
 def test_fill_null():
@@ -1739,7 +1776,8 @@ def test_cast():
     assert pc.cast(arr, options=allow_overflow_options) == pa.array(
         [-1], type='int32')
 
-    arr = pa.array([datetime(2010, 1, 1), datetime(2015, 1, 1)])
+    arr = pa.array(
+        [datetime.datetime(2010, 1, 1), datetime.datetime(2015, 1, 1)])
     expected = pa.array([1262304000000, 1420070400000], type='timestamp[ms]')
     assert pc.cast(arr, 'timestamp[ms]') == expected
 
@@ -1784,13 +1822,14 @@ def test_strptime():
     arr = pa.array(["5/1/2020", None, "12/13/1900"])
 
     got = pc.strptime(arr, format='%m/%d/%Y', unit='s')
-    expected = pa.array([datetime(2020, 5, 1), None, datetime(1900, 12, 13)],
-                        type=pa.timestamp('s'))
+    expected = pa.array(
+        [datetime.datetime(2020, 5, 1), None, datetime.datetime(1900, 12, 13)],
+        type=pa.timestamp('s'))
     assert got == expected
     # Positional format
     assert pc.strptime(arr, '%m/%d/%Y', unit='s') == got
 
-    expected = pa.array([datetime(2020, 1, 5), None, None],
+    expected = pa.array([datetime.datetime(2020, 1, 5), None, None],
                         type=pa.timestamp('s'))
     got = pc.strptime(arr, format='%d/%m/%Y', unit='s', error_is_null=True)
     assert got == expected
@@ -1914,32 +1953,51 @@ def _check_datetime_components(timestamps, timezone=None):
         [iso_year, iso_week, iso_day],
         fields=iso_calendar_fields)
 
-    assert pc.year(tsa).equals(pa.array(ts.dt.year))
+    # Casting is required because pandas with 2.0.0 various numeric
+    # date/time attributes have dtype int32 (previously int64)
+    year = ts.dt.year.astype("int64")
+    month = ts.dt.month.astype("int64")
+    day = ts.dt.day.astype("int64")
+    dayofweek = ts.dt.dayofweek.astype("int64")
+    dayofyear = ts.dt.dayofyear.astype("int64")
+    quarter = ts.dt.quarter.astype("int64")
+    hour = ts.dt.hour.astype("int64")
+    minute = ts.dt.minute.astype("int64")
+    second = ts.dt.second.values.astype("int64")
+    microsecond = ts.dt.microsecond.astype("int64")
+    nanosecond = ts.dt.nanosecond.astype("int64")
+
+    assert pc.year(tsa).equals(pa.array(year))
     assert pc.is_leap_year(tsa).equals(pa.array(ts.dt.is_leap_year))
-    assert pc.month(tsa).equals(pa.array(ts.dt.month))
-    assert pc.day(tsa).equals(pa.array(ts.dt.day))
-    assert pc.day_of_week(tsa).equals(pa.array(ts.dt.dayofweek))
-    assert pc.day_of_year(tsa).equals(pa.array(ts.dt.dayofyear))
+    assert pc.month(tsa).equals(pa.array(month))
+    assert pc.day(tsa).equals(pa.array(day))
+    assert pc.day_of_week(tsa).equals(pa.array(dayofweek))
+    assert pc.day_of_year(tsa).equals(pa.array(dayofyear))
     assert pc.iso_year(tsa).equals(pa.array(iso_year))
     assert pc.iso_week(tsa).equals(pa.array(iso_week))
     assert pc.iso_calendar(tsa).equals(iso_calendar)
-    assert pc.quarter(tsa).equals(pa.array(ts.dt.quarter))
-    assert pc.hour(tsa).equals(pa.array(ts.dt.hour))
-    assert pc.minute(tsa).equals(pa.array(ts.dt.minute))
-    assert pc.second(tsa).equals(pa.array(ts.dt.second.values))
-    assert pc.millisecond(tsa).equals(pa.array(ts.dt.microsecond // 10 ** 3))
-    assert pc.microsecond(tsa).equals(pa.array(ts.dt.microsecond % 10 ** 3))
-    assert pc.nanosecond(tsa).equals(pa.array(ts.dt.nanosecond))
+    assert pc.quarter(tsa).equals(pa.array(quarter))
+    assert pc.hour(tsa).equals(pa.array(hour))
+    assert pc.minute(tsa).equals(pa.array(minute))
+    assert pc.second(tsa).equals(pa.array(second))
+    assert pc.millisecond(tsa).equals(pa.array(microsecond // 10 ** 3))
+    assert pc.microsecond(tsa).equals(pa.array(microsecond % 10 ** 3))
+    assert pc.nanosecond(tsa).equals(pa.array(nanosecond))
     assert pc.subsecond(tsa).equals(pa.array(subseconds))
+    assert pc.local_timestamp(tsa).equals(pa.array(ts.dt.tz_localize(None)))
 
     if ts.dt.tz:
-        is_dst = ts.apply(lambda x: x.dst().seconds > 0)
+        if ts.dt.tz is datetime.timezone.utc:
+            # datetime with utc returns None for dst()
+            is_dst = [False] * len(ts)
+        else:
+            is_dst = ts.apply(lambda x: x.dst().seconds > 0)
         assert pc.is_dst(tsa).equals(pa.array(is_dst))
 
     day_of_week_options = pc.DayOfWeekOptions(
         count_from_zero=False, week_start=1)
     assert pc.day_of_week(tsa, options=day_of_week_options).equals(
-        pa.array(ts.dt.dayofweek + 1))
+        pa.array(dayofweek + 1))
 
     week_options = pc.WeekOptions(
         week_starts_monday=True, count_from_zero=False,
@@ -1958,12 +2016,12 @@ def test_extract_datetime_components():
                   "2009-12-31T04:20:20.004132",
                   "2010-01-01T05:25:25.005321",
                   "2010-01-03T06:30:30.006163",
-                  "2010-01-04T07:35:35",
-                  "2006-01-01T08:40:40",
-                  "2005-12-31T09:45:45",
-                  "2008-12-28",
-                  "2008-12-29",
-                  "2012-01-01 01:02:03"]
+                  "2010-01-04T07:35:35.0",
+                  "2006-01-01T08:40:40.0",
+                  "2005-12-31T09:45:45.0",
+                  "2008-12-28T00:00:00.0",
+                  "2008-12-29T00:00:00.0",
+                  "2012-01-01T01:02:03.0"]
     timezones = ["UTC", "US/Central", "Asia/Kolkata",
                  "Etc/GMT-4", "Etc/GMT+4", "Australia/Broken_Hill"]
 
@@ -1994,12 +2052,12 @@ def test_assume_timezone():
                                  "2009-12-31T04:20:20.004132",
                                  "2010-01-01T05:25:25.005321",
                                  "2010-01-03T06:30:30.006163",
-                                 "2010-01-04T07:35:35",
-                                 "2006-01-01T08:40:40",
-                                 "2005-12-31T09:45:45",
-                                 "2008-12-28",
-                                 "2008-12-29",
-                                 "2012-01-01 01:02:03"])
+                                 "2010-01-04T07:35:35.0",
+                                 "2006-01-01T08:40:40.0",
+                                 "2005-12-31T09:45:45.0",
+                                 "2008-12-28T00:00:00.0",
+                                 "2008-12-29T00:00:00.0",
+                                 "2012-01-01T01:02:03.0"])
     nonexistent = pd.to_datetime(["2015-03-29 02:30:00",
                                   "2015-03-29 03:30:00"])
     ambiguous = pd.to_datetime(["2018-10-28 01:20:00",
@@ -2343,7 +2401,7 @@ def test_select_k_table():
         validate_select_k(result, table, sort_keys=[("a", "ascending")])
 
         result = pc.select_k_unstable(
-            table, k=k, sort_keys=[("a", "ascending"), ("b", "ascending")])
+            table, k=k, sort_keys=[(pc.field("a"), "ascending"), ("b", "ascending")])
         validate_select_k(
             result, table, sort_keys=[("a", "ascending"), ("b", "ascending")])
 
@@ -2427,7 +2485,7 @@ def test_sort_indices_table():
 
     result = pc.sort_indices(table, sort_keys=[("a", "ascending")])
     assert result.to_pylist() == [3, 0, 1, 2]
-    result = pc.sort_indices(table, sort_keys=[("a", "ascending")],
+    result = pc.sort_indices(table, sort_keys=[(pc.field("a"), "ascending")],
                              null_placement="at_start")
     assert result.to_pylist() == [2, 3, 0, 1]
 
@@ -2450,7 +2508,8 @@ def test_sort_indices_table():
     with pytest.raises(ValueError, match="Must specify one or more sort keys"):
         pc.sort_indices(table)
 
-    with pytest.raises(ValueError, match="Nonexistent sort key column"):
+    with pytest.raises(ValueError,
+                       match="Invalid sort key column: No match for.*unknown"):
         pc.sort_indices(table, sort_keys=[("unknown", "ascending")])
 
     with pytest.raises(ValueError, match="not a valid sort order"):
@@ -2747,7 +2806,7 @@ def test_list_element():
 
 
 def test_count_distinct():
-    seed = datetime.now()
+    seed = datetime.datetime.now()
     samples = [seed.replace(year=y) for y in range(1992, 2092)]
     arr = pa.array(samples, pa.timestamp("ns"))
     assert pc.count_distinct(arr) == pa.scalar(len(samples), type=pa.int64())
@@ -3050,3 +3109,18 @@ def test_list_slice_bad_parameters():
         pc.list_slice(arr, 0, 1, step=0)
     with pytest.raises(pa.ArrowInvalid, match=msg + "-1"):
         pc.list_slice(arr, 0, 1, step=-1)
+
+
+def check_run_end_encode_decode(run_end_encode_opts=None):
+    arr = pa.array([1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3])
+    encoded = pc.run_end_encode(arr, options=run_end_encode_opts)
+    decoded = pc.run_end_decode(encoded)
+    assert decoded.type == arr.type
+    assert decoded.equals(arr)
+
+
+def test_run_end_encode():
+    check_run_end_encode_decode()
+    check_run_end_encode_decode(pc.RunEndEncodeOptions(pa.int16()))
+    check_run_end_encode_decode(pc.RunEndEncodeOptions('int32'))
+    check_run_end_encode_decode(pc.RunEndEncodeOptions(pa.int64()))

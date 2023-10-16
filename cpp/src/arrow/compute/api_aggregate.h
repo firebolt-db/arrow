@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "arrow/compute/function.h"
 #include "arrow/datum.h"
 #include "arrow/result.h"
@@ -186,16 +188,38 @@ class ARROW_EXPORT IndexOptions : public FunctionOptions {
 
 /// \brief Configure a grouped aggregation
 struct ARROW_EXPORT Aggregate {
+  Aggregate() = default;
+
+  Aggregate(std::string function, std::shared_ptr<FunctionOptions> options,
+            std::vector<FieldRef> target, std::string name = "")
+      : function(std::move(function)),
+        options(std::move(options)),
+        target(std::move(target)),
+        name(std::move(name)) {}
+
+  Aggregate(std::string function, std::shared_ptr<FunctionOptions> options,
+            FieldRef target, std::string name = "")
+      : Aggregate(std::move(function), std::move(options),
+                  std::vector<FieldRef>{std::move(target)}, std::move(name)) {}
+
+  Aggregate(std::string function, FieldRef target, std::string name)
+      : Aggregate(std::move(function), /*options=*/NULLPTR,
+                  std::vector<FieldRef>{std::move(target)}, std::move(name)) {}
+
+  Aggregate(std::string function, std::string name)
+      : Aggregate(std::move(function), /*options=*/NULLPTR,
+                  /*target=*/std::vector<FieldRef>{}, std::move(name)) {}
+
   /// the name of the aggregation function
   std::string function;
 
   /// options for the aggregation function
   std::shared_ptr<FunctionOptions> options;
 
-  // fields to which aggregations will be applied
-  FieldRef target;
+  /// zero or more fields to which aggregations will be applied
+  std::vector<FieldRef> target;
 
-  // output field name for aggregations
+  /// optional output field name for aggregations
   std::string name;
 };
 
@@ -256,6 +280,36 @@ Result<Datum> Product(
 /// \note API not yet finalized
 ARROW_EXPORT
 Result<Datum> Sum(
+    const Datum& value,
+    const ScalarAggregateOptions& options = ScalarAggregateOptions::Defaults(),
+    ExecContext* ctx = NULLPTR);
+
+/// \brief Calculate the first value of an array
+///
+/// \param[in] value input datum, expecting Array or ChunkedArray
+/// \param[in] options see ScalarAggregateOptions for more information
+/// \param[in] ctx the function execution context, optional
+/// \return datum of the computed first as Scalar
+///
+/// \since 13.0.0
+/// \note API not yet finalized
+ARROW_EXPORT
+Result<Datum> First(
+    const Datum& value,
+    const ScalarAggregateOptions& options = ScalarAggregateOptions::Defaults(),
+    ExecContext* ctx = NULLPTR);
+
+/// \brief Calculate the last value of an array
+///
+/// \param[in] value input datum, expecting Array or ChunkedArray
+/// \param[in] options see ScalarAggregateOptions for more information
+/// \param[in] ctx the function execution context, optional
+/// \return datum of the computed last as a Scalar
+///
+/// \since 13.0.0
+/// \note API not yet finalized
+ARROW_EXPORT
+Result<Datum> Last(
     const Datum& value,
     const ScalarAggregateOptions& options = ScalarAggregateOptions::Defaults(),
     ExecContext* ctx = NULLPTR);

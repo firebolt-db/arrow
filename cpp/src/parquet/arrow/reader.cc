@@ -431,8 +431,7 @@ class RowGroupReaderImpl : public RowGroupReader {
       : impl_(impl), row_group_index_(row_group_index) {}
 
   std::shared_ptr<ColumnChunkReader> Column(int column_index) override {
-    return std::shared_ptr<ColumnChunkReader>(
-        new ColumnChunkReaderImpl(impl_, row_group_index_, column_index));
+    return std::make_shared<ColumnChunkReaderImpl>(impl_, row_group_index_, column_index);
   }
 
   Status ReadTable(const std::vector<int>& column_indices,
@@ -755,7 +754,7 @@ Status StructReader::GetRepLevels(const int16_t** data, int64_t* length) {
   *data = nullptr;
   if (children_.size() == 0) {
     *length = 0;
-    return Status::Invalid("StructReader had no childre");
+    return Status::Invalid("StructReader had no children");
   }
 
   // This method should only be called when this struct or one of its parents
@@ -843,7 +842,15 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<Field>& arrow_f
     auto storage_field = arrow_field->WithType(
         checked_cast<const ExtensionType&>(*arrow_field->type()).storage_type());
     RETURN_NOT_OK(GetReader(field, storage_field, ctx, out));
-    out->reset(new ExtensionReader(arrow_field, std::move(*out)));
+    if (*out) {
+      auto storage_type = (*out)->field()->type();
+      if (!storage_type->Equals(storage_field->type())) {
+        return Status::Invalid(
+            "Due to column pruning only part of an extension's storage type was loaded.  "
+            "An extension type cannot be created without all of its fields");
+      }
+      *out = std::make_unique<ExtensionReader>(arrow_field, std::move(*out));
+    }
     return Status::OK();
   }
 
@@ -857,7 +864,8 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<Field>& arrow_f
     }
     std::unique_ptr<FileColumnIterator> input(
         ctx->iterator_factory(field.column_index, ctx->reader));
-    out->reset(new LeafReader(ctx, arrow_field, std::move(input), field.level_info));
+    *out = std::make_unique<LeafReader>(ctx, arrow_field, std::move(input),
+                                        field.level_info);
   } else if (type_id == ::arrow::Type::LIST || type_id == ::arrow::Type::MAP ||
              type_id == ::arrow::Type::FIXED_SIZE_LIST ||
              type_id == ::arrow::Type::LARGE_LIST) {
@@ -870,7 +878,7 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<Field>& arrow_f
       return Status::OK();
     }
 
-    // These two types might not be equal if there column pruning occurred.
+    // These two types might not be equal if there is column pruning occurred.
     // further down the stack.
     const std::shared_ptr<DataType> reader_child_type = child_reader->field()->type();
     // This should really never happen but was raised as a question on the code
@@ -892,27 +900,27 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<Field>& arrow_f
                      *schema_child_type.field(1)->type())) {
         list_field = list_field->WithType(std::make_shared<::arrow::MapType>(
             reader_child_type->field(
-                0),  // field 0 is unchanged baed on previous if statement
+                0),  // field 0 is unchanged based on previous if statement
             reader_child_type->field(1)));
       }
       // Map types are list<struct<key, value>> so use ListReader
       // for reconstruction.
-      out->reset(new ListReader<int32_t>(ctx, list_field, field.level_info,
-                                         std::move(child_reader)));
+      *out = std::make_unique<ListReader<int32_t>>(ctx, list_field, field.level_info,
+                                                   std::move(child_reader));
     } else if (type_id == ::arrow::Type::LIST) {
       if (!reader_child_type->Equals(schema_child_type)) {
         list_field = list_field->WithType(::arrow::list(reader_child_type));
       }
 
-      out->reset(new ListReader<int32_t>(ctx, list_field, field.level_info,
-                                         std::move(child_reader)));
+      *out = std::make_unique<ListReader<int32_t>>(ctx, list_field, field.level_info,
+                                                   std::move(child_reader));
     } else if (type_id == ::arrow::Type::LARGE_LIST) {
       if (!reader_child_type->Equals(schema_child_type)) {
         list_field = list_field->WithType(::arrow::large_list(reader_child_type));
       }
 
-      out->reset(new ListReader<int64_t>(ctx, list_field, field.level_info,
-                                         std::move(child_reader)));
+      *out = std::make_unique<ListReader<int64_t>>(ctx, list_field, field.level_info,
+                                                   std::move(child_reader));
     } else if (type_id == ::arrow::Type::FIXED_SIZE_LIST) {
       if (!reader_child_type->Equals(schema_child_type)) {
         auto& fixed_list_type =
@@ -922,8 +930,8 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<Field>& arrow_f
             list_field->WithType(::arrow::fixed_size_list(reader_child_type, list_size));
       }
 
-      out->reset(new FixedSizeListReader(ctx, list_field, field.level_info,
-                                         std::move(child_reader)));
+      *out = std::make_unique<FixedSizeListReader>(ctx, list_field, field.level_info,
+                                                   std::move(child_reader));
     } else {
       return Status::UnknownError("Unknown list type: ", field.field->ToString());
     }
@@ -950,15 +958,15 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<Field>& arrow_f
       child_fields.push_back(child_field);
       child_readers.emplace_back(std::move(child_reader));
     }
-    if (child_fields.size() == 0) {
+    if (child_fields.empty()) {
       *out = nullptr;
       return Status::OK();
     }
     auto filtered_field =
         ::arrow::field(arrow_field->name(), ::arrow::struct_(child_fields),
                        arrow_field->nullable(), arrow_field->metadata());
-    out->reset(new StructReader(ctx, filtered_field, field.level_info,
-                                std::move(child_readers)));
+    *out = std::make_unique<StructReader>(ctx, filtered_field, field.level_info,
+                                          std::move(child_readers));
   } else {
     return Status::Invalid("Unsupported nested type: ", arrow_field->ToString());
   }
@@ -1212,7 +1220,7 @@ Status FileReaderImpl::GetColumn(int i, FileColumnIteratorFactory iterator_facto
   ctx->filter_leaves = false;
   std::unique_ptr<ColumnReaderImpl> result;
   RETURN_NOT_OK(GetReader(manifest_.schema_fields[i], ctx, &result));
-  out->reset(result.release());
+  *out = std::move(result);
   return Status::OK();
 }
 
@@ -1310,7 +1318,7 @@ Status FileReader::Make(::arrow::MemoryPool* pool,
                         std::unique_ptr<ParquetFileReader> reader,
                         const ArrowReaderProperties& properties,
                         std::unique_ptr<FileReader>* out) {
-  out->reset(new FileReaderImpl(pool, std::move(reader), properties));
+  *out = std::make_unique<FileReaderImpl>(pool, std::move(reader), properties);
   return static_cast<FileReaderImpl*>(out->get())->Init();
 }
 
@@ -1385,13 +1393,23 @@ Status FuzzReader(std::unique_ptr<FileReader> reader) {
 
 Status FuzzReader(const uint8_t* data, int64_t size) {
   auto buffer = std::make_shared<::arrow::Buffer>(data, size);
-  auto file = std::make_shared<::arrow::io::BufferReader>(buffer);
-  FileReaderBuilder builder;
-  RETURN_NOT_OK(builder.Open(std::move(file)));
+  Status st;
+  for (auto batch_size : std::vector<std::optional<int>>{std::nullopt, 1, 13, 300}) {
+    auto file = std::make_shared<::arrow::io::BufferReader>(buffer);
+    FileReaderBuilder builder;
+    ArrowReaderProperties properties;
+    if (batch_size) {
+      properties.set_batch_size(batch_size.value());
+    }
+    builder.properties(properties);
 
-  std::unique_ptr<FileReader> reader;
-  RETURN_NOT_OK(builder.Build(&reader));
-  return FuzzReader(std::move(reader));
+    RETURN_NOT_OK(builder.Open(std::move(file)));
+
+    std::unique_ptr<FileReader> reader;
+    RETURN_NOT_OK(builder.Build(&reader));
+    st &= FuzzReader(std::move(reader));
+  }
+  return st;
 }
 
 }  // namespace internal

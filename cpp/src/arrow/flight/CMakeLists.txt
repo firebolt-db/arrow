@@ -67,8 +67,8 @@ list(APPEND
      Boost::headers
      Boost::filesystem
      Boost::system
-     GTest::gtest
-     GTest::gmock)
+     ${ARROW_GTEST_GTEST}
+     ${ARROW_GTEST_GMOCK})
 list(APPEND ARROW_FLIGHT_TEST_LINK_LIBS gRPC::grpc++)
 
 # TODO(wesm): Protobuf shared vs static linking
@@ -199,6 +199,7 @@ set(ARROW_FLIGHT_SRCS
     serialization_internal.cc
     server.cc
     server_auth.cc
+    server_middleware.cc
     server_tracing_middleware.cc
     transport.cc
     transport_server.cc
@@ -238,13 +239,19 @@ add_arrow_lib(arrow_flight
               SHARED_LINK_FLAGS
               ${ARROW_VERSION_SCRIPT_FLAGS} # Defined in cpp/arrow/CMakeLists.txt
               SHARED_LINK_LIBS
-              arrow_shared
+              # We must use gRPC::grpc++ first. If gRPC::grpc++
+              # depends on bundled Abseil, bundled Abseil and system
+              # Abseil may be mixed.
+              #
+              # See also a comment for "if(ARROW_GCS)" in
+              # cpp/CMakeLists.txt.
               ${ARROW_FLIGHT_LINK_LIBS}
+              arrow_shared
               SHARED_INSTALL_INTERFACE_LIBS
               Arrow::arrow_shared
               STATIC_LINK_LIBS
-              arrow_static
               ${ARROW_FLIGHT_LINK_LIBS}
+              arrow_static
               STATIC_INSTALL_INTERFACE_LIBS
               Arrow::arrow_static)
 
@@ -280,7 +287,7 @@ if(ARROW_TESTING)
     set(ARROW_FLIGHT_TESTING_STATIC_INSTALL_INTERFACE_LIBS
         ArrowFlight::arrow_flight_static)
   endif()
-  if(ARROW_TEST_LINKAGE STREQUAL "shared")
+  if(ARROW_FLIGHT_TEST_LINKAGE STREQUAL "shared")
     list(APPEND ARROW_FLIGHT_TESTING_SHARED_LINK_LIBS arrow_testing_shared)
     list(APPEND ARROW_FLIGHT_TESTING_STATIC_LINK_LIBS arrow_testing_shared)
     list(APPEND ARROW_FLIGHT_TESTING_SHARED_INSTALL_INTERFACE_LIBS
@@ -308,7 +315,7 @@ if(ARROW_TESTING)
                 test_definitions.cc
                 test_util.cc
                 DEPENDENCIES
-                GTest::gtest
+                ${ARROW_GTEST_GTEST}
                 flight_grpc_gen
                 arrow_dependencies
                 SHARED_LINK_LIBS

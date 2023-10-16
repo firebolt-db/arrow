@@ -143,7 +143,7 @@ Result<ExtensionSet> GetExtensionSetFromPlan(const substrait::Plan& plan,
 
 namespace {
 
-// FIXME Is there some way to get these from the cmake files?
+// TODO(ARROW-18145) Populate these from cmake files
 constexpr uint32_t kSubstraitMajorVersion = 0;
 constexpr uint32_t kSubstraitMinorVersion = 20;
 constexpr uint32_t kSubstraitPatchVersion = 0;
@@ -160,7 +160,7 @@ std::unique_ptr<substrait::Version> CreateVersion() {
 }  // namespace
 
 Result<std::unique_ptr<substrait::Plan>> PlanToProto(
-    const compute::Declaration& declr, ExtensionSet* ext_set,
+    const acero::Declaration& declr, ExtensionSet* ext_set,
     const ConversionOptions& conversion_options) {
   auto subs_plan = std::make_unique<substrait::Plan>();
   subs_plan->set_allocated_version(CreateVersion().release());

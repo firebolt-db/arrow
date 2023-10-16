@@ -18,6 +18,8 @@
 library(dplyr, warn.conflicts = FALSE)
 library(stringr)
 
+skip_if_not_available("acero")
+
 tbl <- example_data
 
 test_that("group_by groupings are recorded", {
@@ -47,6 +49,24 @@ test_that("group_by supports creating/renaming", {
   compare_dplyr_binding(
     .input %>%
       group_by(int > 4, lgl, foo = int > 5) %>%
+      collect(),
+    tbl
+  )
+})
+
+test_that("group_by supports re-grouping by overlapping groups", {
+  compare_dplyr_binding(
+    .input %>%
+      group_by(chr, int) %>%
+      group_by(int, dbl) %>%
+      collect(),
+    tbl
+  )
+
+  compare_dplyr_binding(
+    .input %>%
+      group_by(chr, int) %>%
+      group_by(int, chr = "some new value") %>%
       collect(),
     tbl
   )
@@ -281,7 +301,7 @@ test_that("Can use across() within group_by()", {
   test_groups <- c("dbl", "int", "chr")
   compare_dplyr_binding(
     .input %>%
-      group_by(across()) %>%
+      group_by(across(everything())) %>%
       collect(),
     tbl
   )

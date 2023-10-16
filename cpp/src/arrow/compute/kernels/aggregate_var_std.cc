@@ -20,7 +20,7 @@
 #include "arrow/compute/api_aggregate.h"
 #include "arrow/compute/kernels/aggregate_internal.h"
 #include "arrow/compute/kernels/aggregate_var_std_internal.h"
-#include "arrow/compute/kernels/common.h"
+#include "arrow/compute/kernels/common_internal.h"
 #include "arrow/util/bit_run_reader.h"
 #include "arrow/util/int128_internal.h"
 
@@ -71,9 +71,11 @@ struct VarStdState {
           return (v - mean) * (v - mean);
         });
 
-    this->count = count;
-    this->mean = mean;
-    this->m2 = m2;
+    ThisType state(decimal_scale, options);
+    state.count = count;
+    state.mean = mean;
+    state.m2 = m2;
+    this->MergeFrom(state);
   }
 
   // int32/16/8: textbook one pass algorithm with integer arithmetic

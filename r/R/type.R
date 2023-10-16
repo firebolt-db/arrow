@@ -22,12 +22,19 @@
 #' @format NULL
 #' @docType class
 #'
-#' @section Methods:
+#' @section R6 Methods:
 #'
 #' - `$ToString()`: String representation of the DataType
 #' - `$Equals(other)`: Is the DataType equal to `other`
 #' - `$fields()`: The children fields associated with this type
+#' - `$code()`: Produces an R call of the data type.
 #'
+#' There are also some active bindings:
+#' - `$id`: integer Arrow type id.
+#' - `$name`: string Arrow type name.
+#' - `$num_fields`: number of child fields.
+#'
+#' @seealso [infer_type()]
 #' @rdname DataType
 #' @name DataType
 #' @seealso [`data-type`]
@@ -371,10 +378,10 @@ NestedType <- R6Class("NestedType", inherit = DataType)
 #' @param ... For `struct()`, a named list of types to define the struct columns
 #'
 #' @name data-type
-#' @return An Arrow type object inheriting from DataType.
+#' @return An Arrow type object inheriting from [DataType].
 #' @export
 #' @seealso [dictionary()] for creating a dictionary (factor-like) type.
-#' @examples
+#' @examplesIf arrow_with_acero()
 #' bool()
 #' struct(a = int32(), b = double())
 #' timestamp("ms", timezone = "CEST")
@@ -633,6 +640,9 @@ StructType$create <- function(...) struct__(.fields(list(...)))
 #' @rdname data-type
 #' @export
 struct <- StructType$create
+
+#' @export
+names.StructType <- function(x) StructType__field_names(x)
 
 ListType <- R6Class("ListType",
   inherit = NestedType,

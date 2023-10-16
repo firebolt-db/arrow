@@ -6,7 +6,7 @@
 \description{
 The \code{arrow} package contains methods for 37 \code{dplyr} table functions, many of
 which are "verbs" that do transformations to one or more tables.
-The package also has mappings of 207 R functions to the corresponding
+The package also has mappings of 211 R functions to the corresponding
 functions in the Arrow compute library. These allow you to write code inside
 of \code{dplyr} methods that call R functions, including many in packages like
 \code{stringr} and \code{lubridate}, and they will get translated to Arrow and run
@@ -53,9 +53,9 @@ Table into an R \code{data.frame}.
 \item \code{\link[dplyr:slice]{slice_tail()}}: slicing within groups not supported; Arrow datasets do not have row order, so tail is non-deterministic; \code{prop} only supported on queries where \code{nrow()} is knowable without evaluating
 \item \code{\link[dplyr:summarise]{summarise()}}: window functions not currently supported; arguments \code{.drop = FALSE} and `.groups = "rowwise" not supported
 \item \code{\link[dplyr:count]{tally()}}
-\item \code{\link[dplyr:mutate]{transmute()}}
+\item \code{\link[dplyr:transmute]{transmute()}}
 \item \code{\link[dplyr:group_by]{ungroup()}}
-\item \code{\link[dplyr:reexports]{union()}}
+\item \code{\link[dplyr:setops]{union()}}
 \item \code{\link[dplyr:setops]{union_all()}}
 }
 }
@@ -68,7 +68,7 @@ can assume that the function works in Acero just as it does in R.
 Functions can be called either as \code{pkg::fun()} or just \code{fun()}, i.e. both
 \code{str_sub()} and \code{stringr::str_sub()} work.
 
-In addition to these functions, you can call any of Arrow's 243 compute
+In addition to these functions, you can call any of Arrow's 254 compute
 functions directly. Arrow has many functions that don't map to an existing R
 function. In other cases where there is an R function mapping, you can still
 call the Arrow function directly if you don't want the adaptations that the R
@@ -85,30 +85,31 @@ as \code{arrow_ascii_is_decimal}.
 
 \subsection{base}{
 \itemize{
-\item \code{\link[=-]{-}}
 \item \code{\link[=!]{!}}
 \item \code{\link[=!=]{!=}}
-\item \code{\link[=*]{*}}
-\item \code{\link[=/]{/}}
-\item \code{\link[=&]{&}}
-\item \code{\link[=\%/\%]{\%/\%}}
 \item \code{\link[=\%\%]{\%\%}}
+\item \code{\link[=\%/\%]{\%/\%}}
 \item \code{\link[=\%in\%]{\%in\%}}
-\item \code{\link[=^]{^}}
+\item \code{\link[=&]{&}}
+\item \code{\link[=*]{*}}
 \item \code{\link[=+]{+}}
+\item \code{\link[=-]{-}}
+\item \code{\link[=/]{/}}
 \item \code{\link[=<]{<}}
 \item \code{\link[=<=]{<=}}
 \item \code{\link[===]{==}}
 \item \code{\link[=>]{>}}
 \item \code{\link[=>=]{>=}}
-\item \code{\link[=|]{|}}
+\item \code{\link[base:ISOdatetime]{ISOdate()}}
+\item \code{\link[base:ISOdatetime]{ISOdatetime()}}
+\item \code{\link[=^]{^}}
 \item \code{\link[base:MathFun]{abs()}}
 \item \code{\link[base:Trig]{acos()}}
 \item \code{\link[base:all]{all()}}
 \item \code{\link[base:any]{any()}}
-\item \code{\link[base:character]{as.character()}}
 \item \code{\link[base:as.Date]{as.Date()}}: Multiple \code{tryFormats} not supported in Arrow.
 Consider using the lubridate specialised parsing functions \code{ymd()}, \code{ymd()}, etc.
+\item \code{\link[base:character]{as.character()}}
 \item \code{\link[base:difftime]{as.difftime()}}: only supports \code{units = "secs"} (the default)
 \item \code{\link[base:double]{as.double()}}
 \item \code{\link[base:integer]{as.integer()}}
@@ -139,8 +140,6 @@ Consider using the lubridate specialised parsing functions \code{ymd()}, \code{y
 \item \code{\link[base:NA]{is.na()}}
 \item \code{\link[base:is.finite]{is.nan()}}
 \item \code{\link[base:numeric]{is.numeric()}}
-\item \code{\link[base:ISOdatetime]{ISOdate()}}
-\item \code{\link[base:ISOdatetime]{ISOdatetime()}}
 \item \code{\link[base:Log]{log()}}
 \item \code{\link[base:Log]{log10()}}
 \item \code{\link[base:Log]{log1p()}}
@@ -172,6 +171,7 @@ Valid values are "s", "ms" (default), "us", "ns".
 \item \code{\link[base:chartr]{tolower()}}
 \item \code{\link[base:chartr]{toupper()}}
 \item \code{\link[base:Round]{trunc()}}
+\item \code{\link[=|]{|}}
 }
 }
 
@@ -186,7 +186,7 @@ Valid values are "s", "ms" (default), "us", "ns".
 \itemize{
 \item \code{\link[dplyr:across]{across()}}
 \item \code{\link[dplyr:between]{between()}}
-\item \code{\link[dplyr:case_when]{case_when()}}
+\item \code{\link[dplyr:case_when]{case_when()}}: \code{.ptype} and \code{.size} arguments not supported
 \item \code{\link[dplyr:coalesce]{coalesce()}}
 \item \code{\link[dplyr:desc]{desc()}}
 \item \code{\link[dplyr:across]{if_all()}}
@@ -228,11 +228,14 @@ Valid values are "s", "ms" (default), "us", "ns".
 \item \code{\link[lubridate:year]{epiyear()}}
 \item \code{\link[lubridate:parse_date_time]{fast_strptime()}}: non-default values of \code{lt} and \code{cutoff_2000} not supported
 \item \code{\link[lubridate:round_date]{floor_date()}}
+\item \code{\link[lubridate:force_tz]{force_tz()}}: Timezone conversion from non-UTC timezone not supported;
+\code{roll_dst} values of 'error' and 'boundary' are supported for nonexistent times,
+\code{roll_dst} values of 'error', 'pre', and 'post' are supported for ambiguous times.
 \item \code{\link[lubridate:format_ISO8601]{format_ISO8601()}}
 \item \code{\link[lubridate:hour]{hour()}}
 \item \code{\link[lubridate:date_utils]{is.Date()}}
-\item \code{\link[lubridate:is.instant]{is.instant()}}
 \item \code{\link[lubridate:posix_utils]{is.POSIXct()}}
+\item \code{\link[lubridate:is.instant]{is.instant()}}
 \item \code{\link[lubridate:is.instant]{is.timepoint()}}
 \item \code{\link[lubridate:week]{isoweek()}}
 \item \code{\link[lubridate:year]{isoyear()}}
@@ -251,6 +254,8 @@ providing both \code{num} and \code{...} is not supported
 \item \code{\link[lubridate:ymd]{my()}}: \code{locale} argument not supported
 \item \code{\link[lubridate:ymd]{myd()}}: \code{locale} argument not supported
 \item \code{\link[lubridate:parse_date_time]{parse_date_time()}}: \code{quiet = FALSE} is not supported
+Available formats are H, I, j, M, S, U, w, W, y, Y, R, T.
+On Linux and OS X additionally a, A, b, B, Om, p, r are available.
 \item \code{\link[lubridate:am]{pm()}}
 \item \code{\link[lubridate:day]{qday()}}
 \item \code{\link[lubridate:quarter]{quarter()}}
@@ -260,6 +265,7 @@ providing both \code{num} and \code{...} is not supported
 \item \code{\link[lubridate:tz]{tz()}}
 \item \code{\link[lubridate:day]{wday()}}
 \item \code{\link[lubridate:week]{week()}}
+\item \code{\link[lubridate:with_tz]{with_tz()}}
 \item \code{\link[lubridate:day]{yday()}}
 \item \code{\link[lubridate:ymd]{ydm()}}: \code{locale} argument not supported
 \item \code{\link[lubridate:ymd_hms]{ydm_h()}}: \code{locale} argument not supported
@@ -317,8 +323,10 @@ Pattern modifiers \code{coll()} and \code{boundary()} are not supported in any f
 \item \code{\link[stringr:str_dup]{str_dup()}}
 \item \code{\link[stringr:str_starts]{str_ends()}}
 \item \code{\link[stringr:str_length]{str_length()}}
-\item \code{str_like()}: not yet in a released version of \code{stringr}, but it is supported in \code{arrow}
+\item \code{\link[stringr:str_like]{str_like()}}
 \item \code{\link[stringr:str_pad]{str_pad()}}
+\item \code{\link[stringr:str_remove]{str_remove()}}
+\item \code{\link[stringr:str_remove]{str_remove_all()}}
 \item \code{\link[stringr:str_replace]{str_replace()}}
 \item \code{\link[stringr:str_replace]{str_replace_all()}}
 \item \code{\link[stringr:str_split]{str_split()}}: Case-insensitive string splitting and splitting into 0 parts not supported

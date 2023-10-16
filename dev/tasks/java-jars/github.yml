@@ -75,6 +75,18 @@ jobs:
         run: pip install -e arrow/dev/archery[all]
       - name: Install dependencies
         run: |
+          # We want to use llvm@14 to avoid shared z3
+          # dependency. llvm@14 doesn't depend on z3 and llvm depends
+          # on z3. And Homebrew's z3 provides only shared library. It
+          # doesn't provides static z3 because z3's CMake doesn't accept
+          # building both shared and static libraries at once.
+          # See also: Z3_BUILD_LIBZ3_SHARED in
+          # https://github.com/Z3Prover/z3/blob/master/README-CMake.md
+          #
+          # If llvm is installed, Apache Arrow C++ uses llvm rather than
+          # llvm@14 because llvm is newer than llvm@14.
+          brew uninstall llvm || :
+
           brew bundle --file=arrow/cpp/Brewfile
           # We want to link aws-sdk-cpp statically but Homebrew's
           # aws-sdk-cpp provides only shared library. If we have
@@ -82,6 +94,12 @@ jobs:
           # aws-sdk-cpp and bundled aws-sdk-cpp. We uninstall Homebrew's
           # aws-sdk-cpp to ensure using only bundled aws-sdk-cpp.
           brew uninstall aws-sdk-cpp
+          # We want to use bundled RE2 for static linking. If
+          # Homebrew's RE2 is installed, its header file may be used.
+          # We uninstall Homebrew's RE2 to ensure using bundled RE2.
+          brew uninstall grpc || : # gRPC depends on RE2
+          brew uninstall re2 || :
+
           brew bundle --file=arrow/java/Brewfile
       - name: Build C++ libraries
         env:
@@ -166,19 +184,16 @@ jobs:
           test -f arrow/java-dist/x86_64/libarrow_dataset_jni.so
           test -f arrow/java-dist/x86_64/libarrow_orc_jni.so
           test -f arrow/java-dist/x86_64/libgandiva_jni.so
-          test -f arrow/java-dist/x86_64/libplasma_java.so
 
           test -f arrow/java-dist/x86_64/libarrow_cdata_jni.dylib
           test -f arrow/java-dist/x86_64/libarrow_dataset_jni.dylib
           test -f arrow/java-dist/x86_64/libarrow_orc_jni.dylib
           test -f arrow/java-dist/x86_64/libgandiva_jni.dylib
-          test -f arrow/java-dist/x86_64/libplasma_java.dylib
 
           test -f arrow/java-dist/aarch_64/libarrow_cdata_jni.dylib
           test -f arrow/java-dist/aarch_64/libarrow_dataset_jni.dylib
           test -f arrow/java-dist/aarch_64/libarrow_orc_jni.dylib
           test -f arrow/java-dist/aarch_64/libgandiva_jni.dylib
-          test -f arrow/java-dist/aarch_64/libplasma_java.dylib
 
           test -f arrow/java-dist/x86_64/arrow_cdata_jni.dll
           test -f arrow/java-dist/x86_64/arrow_dataset_jni.dll
@@ -193,5 +208,7 @@ jobs:
             $GITHUB_WORKSPACE/arrow \
             $GITHUB_WORKSPACE/arrow/java-dist
       {{ macros.github_upload_releases(["arrow/java-dist/*.jar",
+                                        "arrow/java-dist/*.json",
                                         "arrow/java-dist/*.pom",
+                                        "arrow/java-dist/*.xml",
                                         "arrow/java-dist/*.zip"])|indent }}

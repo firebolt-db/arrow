@@ -1,7 +1,7 @@
 # arrow <img src="https://arrow.apache.org/img/arrow-logo_hex_black-txt_white-bg.png" align="right" alt="" width="120" />
 
 [![cran](https://www.r-pkg.org/badges/version-last-release/arrow)](https://cran.r-project.org/package=arrow)
-[![CI](https://github.com/apache/arrow/workflows/R/badge.svg?event=push)](https://github.com/apache/arrow/actions?query=workflow%3AR+branch%3Amaster+event%3Apush)
+[![CI](https://github.com/apache/arrow/workflows/R/badge.svg?event=push)](https://github.com/apache/arrow/actions?query=workflow%3AR+branch%3Amain+event%3Apush)
 [![conda-forge](https://img.shields.io/conda/vn/conda-forge/r-arrow.svg)](https://anaconda.org/conda-forge/r-arrow)
 
 [Apache Arrow](https://arrow.apache.org/) is a cross-language
@@ -22,7 +22,7 @@ The arrow package provides functionality for a wide range of data analysis
 tasks. It allows users to read and write data in a variety formats:
 
 -   Read and write Parquet files, an efficient and widely used columnar format
--   Read and write Feather files, a format optimized for speed and
+-   Read and write Arrow (formerly known as Feather) files, a format optimized for speed and
     interoperability
 -   Read and write CSV files with excellent speed and efficiency
 -   Read and write multi-file and larger-than-memory datasets

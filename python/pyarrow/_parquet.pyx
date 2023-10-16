@@ -18,32 +18,26 @@
 # cython: profile=False
 # distutils: language = c++
 
-import io
 from textwrap import indent
 import warnings
-
-import numpy as np
-
-from libcpp cimport nullptr
 
 from cython.operator cimport dereference as deref
 from pyarrow.includes.common cimport *
 from pyarrow.includes.libarrow cimport *
-from pyarrow.lib cimport (_Weakrefable, Buffer, Array, Schema,
+from pyarrow.lib cimport (_Weakrefable, Buffer, Schema,
                           check_status,
                           MemoryPool, maybe_unbox_memory_pool,
                           Table, NativeFile,
                           pyarrow_wrap_chunked_array,
                           pyarrow_wrap_schema,
                           pyarrow_wrap_table,
-                          pyarrow_wrap_buffer,
                           pyarrow_wrap_batch,
                           pyarrow_wrap_scalar,
                           NativeFile, get_reader, get_writer,
                           string_to_timeunit)
 
 from pyarrow.lib import (ArrowException, NativeFile, BufferOutputStream,
-                         _stringify_path, _datetime_from_int,
+                         _stringify_path,
                          tobytes, frombytes)
 
 cimport cpython as cp
@@ -455,7 +449,7 @@ cdef class ColumnChunkMetaData(_Weakrefable):
         Encodings used for column (tuple of str).
 
         One of 'PLAIN', 'BIT_PACKED', 'RLE', 'BYTE_STREAM_SPLIT', 'DELTA_BINARY_PACKED',
-        'DELTA_BYTE_ARRAY'.
+        'DELTA_LENGTH_BYTE_ARRAY', 'DELTA_BYTE_ARRAY'.
         """
         return tuple(map(encoding_name_from_enum, self.metadata.encodings()))
 
@@ -1104,6 +1098,7 @@ cdef encoding_enum_from_name(str encoding_name):
         'RLE': ParquetEncoding_RLE,
         'BYTE_STREAM_SPLIT': ParquetEncoding_BYTE_STREAM_SPLIT,
         'DELTA_BINARY_PACKED': ParquetEncoding_DELTA_BINARY_PACKED,
+        'DELTA_LENGTH_BYTE_ARRAY': ParquetEncoding_DELTA_LENGTH_BYTE_ARRAY,
         'DELTA_BYTE_ARRAY': ParquetEncoding_DELTA_BYTE_ARRAY,
         'RLE_DICTIONARY': 'dict',
         'PLAIN_DICTIONARY': 'dict',
@@ -1180,9 +1175,7 @@ cdef class ParquetReader(_Weakrefable):
             CReaderProperties properties = default_reader_properties()
             ArrowReaderProperties arrow_props = (
                 default_arrow_reader_properties())
-            c_string path
             FileReaderBuilder builder
-            TimeUnit int96_timestamp_unit_code
 
         if metadata is not None:
             c_metadata = metadata.sp_metadata
@@ -1290,7 +1283,6 @@ cdef class ParquetReader(_Weakrefable):
             vector[int] c_row_groups
             vector[int] c_column_indices
             shared_ptr[CRecordBatch] record_batch
-            shared_ptr[TableBatchReader] batch_reader
             unique_ptr[CRecordBatchReader] recordbatchreader
 
         self.set_batch_size(batch_size)
@@ -1596,6 +1588,15 @@ cdef shared_ptr[WriterProperties] _create_writer_properties(
         props.encryption(
             (<FileEncryptionProperties>encryption_properties).unwrap())
 
+    # For backwards compatibility reasons we cap the maximum row group size
+    # at 64Mi rows.  This could be changed in the future, though it would be
+    # a breaking change.
+    #
+    # The user can always specify a smaller row group size (and the default
+    # is smaller) when calling write_table.  If the call to write_table uses
+    # a size larger than this then it will be latched to this value.
+    props.max_row_group_length(64*1024*1024)
+
     properties = props.build()
 
     return properties
@@ -1606,7 +1607,8 @@ cdef shared_ptr[ArrowWriterProperties] _create_arrow_writer_properties(
         coerce_timestamps=None,
         allow_truncated_timestamps=False,
         writer_engine_version=None,
-        use_compliant_nested_type=False) except *:
+        use_compliant_nested_type=True,
+        store_schema=True) except *:
     """Arrow writer properties"""
     cdef:
         shared_ptr[ArrowWriterProperties] arrow_properties
@@ -1614,7 +1616,8 @@ cdef shared_ptr[ArrowWriterProperties] _create_arrow_writer_properties(
 
     # Store the original Arrow schema so things like dictionary types can
     # be automatically reconstructed
-    arrow_props.store_schema()
+    if store_schema:
+        arrow_props.store_schema()
 
     # int96 support
 
@@ -1686,6 +1689,7 @@ cdef class ParquetWriter(_Weakrefable):
         FileEncryptionProperties encryption_properties
         int64_t write_batch_size
         int64_t dictionary_pagesize_limit
+        object store_schema
 
     def __cinit__(self, where, Schema schema, use_dictionary=None,
                   compression=None, version=None,
@@ -1700,10 +1704,11 @@ cdef class ParquetWriter(_Weakrefable):
                   column_encoding=None,
                   writer_engine_version=None,
                   data_page_version=None,
-                  use_compliant_nested_type=False,
+                  use_compliant_nested_type=True,
                   encryption_properties=None,
                   write_batch_size=None,
-                  dictionary_pagesize_limit=None):
+                  dictionary_pagesize_limit=None,
+                  store_schema=True):
         cdef:
             shared_ptr[WriterProperties] properties
             shared_ptr[ArrowWriterProperties] arrow_properties
@@ -1740,7 +1745,8 @@ cdef class ParquetWriter(_Weakrefable):
             coerce_timestamps=coerce_timestamps,
             allow_truncated_timestamps=allow_truncated_timestamps,
             writer_engine_version=writer_engine_version,
-            use_compliant_nested_type=use_compliant_nested_type
+            use_compliant_nested_type=use_compliant_nested_type,
+            store_schema=store_schema,
         )
 
         pool = maybe_unbox_memory_pool(memory_pool)

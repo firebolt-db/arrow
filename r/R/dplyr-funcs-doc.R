@@ -21,7 +21,7 @@
 #'
 #' The `arrow` package contains methods for 37 `dplyr` table functions, many of
 #' which are "verbs" that do transformations to one or more tables.
-#' The package also has mappings of 207 R functions to the corresponding
+#' The package also has mappings of 211 R functions to the corresponding
 #' functions in the Arrow compute library. These allow you to write code inside
 #' of `dplyr` methods that call R functions, including many in packages like
 #' `stringr` and `lubridate`, and they will get translated to Arrow and run
@@ -83,7 +83,7 @@
 #' Functions can be called either as `pkg::fun()` or just `fun()`, i.e. both
 #' `str_sub()` and `stringr::str_sub()` work.
 #'
-#' In addition to these functions, you can call any of Arrow's 243 compute
+#' In addition to these functions, you can call any of Arrow's 254 compute
 #' functions directly. Arrow has many functions that don't map to an existing R
 #' function. In other cases where there is an R function mapping, you can still
 #' call the Arrow function directly if you don't want the adaptations that the R
@@ -99,30 +99,31 @@
 #'
 #' ## base
 #'
-#' * [`-`][-()]
 #' * [`!`][!()]
 #' * [`!=`][!=()]
-#' * [`*`][*()]
-#' * [`/`][/()]
-#' * [`&`][&()]
-#' * [`%/%`][%/%()]
 #' * [`%%`][%%()]
+#' * [`%/%`][%/%()]
 #' * [`%in%`][%in%()]
-#' * [`^`][^()]
+#' * [`&`][&()]
+#' * [`*`][*()]
 #' * [`+`][+()]
+#' * [`-`][-()]
+#' * [`/`][/()]
 #' * [`<`][<()]
 #' * [`<=`][<=()]
 #' * [`==`][==()]
 #' * [`>`][>()]
 #' * [`>=`][>=()]
-#' * [`|`][|()]
+#' * [`ISOdate()`][base::ISOdate()]
+#' * [`ISOdatetime()`][base::ISOdatetime()]
+#' * [`^`][^()]
 #' * [`abs()`][base::abs()]
 #' * [`acos()`][base::acos()]
 #' * [`all()`][base::all()]
 #' * [`any()`][base::any()]
-#' * [`as.character()`][base::as.character()]
 #' * [`as.Date()`][base::as.Date()]: Multiple `tryFormats` not supported in Arrow.
 #' Consider using the lubridate specialised parsing functions `ymd()`, `ymd()`, etc.
+#' * [`as.character()`][base::as.character()]
 #' * [`as.difftime()`][base::as.difftime()]: only supports `units = "secs"` (the default)
 #' * [`as.double()`][base::as.double()]
 #' * [`as.integer()`][base::as.integer()]
@@ -153,8 +154,6 @@
 #' * [`is.na()`][base::is.na()]
 #' * [`is.nan()`][base::is.nan()]
 #' * [`is.numeric()`][base::is.numeric()]
-#' * [`ISOdate()`][base::ISOdate()]
-#' * [`ISOdatetime()`][base::ISOdatetime()]
 #' * [`log()`][base::log()]
 #' * [`log10()`][base::log10()]
 #' * [`log1p()`][base::log1p()]
@@ -186,6 +185,7 @@
 #' * [`tolower()`][base::tolower()]
 #' * [`toupper()`][base::toupper()]
 #' * [`trunc()`][base::trunc()]
+#' * [`|`][|()]
 #'
 #' ## bit64
 #'
@@ -196,7 +196,7 @@
 #'
 #' * [`across()`][dplyr::across()]
 #' * [`between()`][dplyr::between()]
-#' * [`case_when()`][dplyr::case_when()]
+#' * [`case_when()`][dplyr::case_when()]: `.ptype` and `.size` arguments not supported
 #' * [`coalesce()`][dplyr::coalesce()]
 #' * [`desc()`][dplyr::desc()]
 #' * [`if_all()`][dplyr::if_all()]
@@ -236,11 +236,14 @@
 #' * [`epiyear()`][lubridate::epiyear()]
 #' * [`fast_strptime()`][lubridate::fast_strptime()]: non-default values of `lt` and `cutoff_2000` not supported
 #' * [`floor_date()`][lubridate::floor_date()]
+#' * [`force_tz()`][lubridate::force_tz()]: Timezone conversion from non-UTC timezone not supported;
+#' `roll_dst` values of 'error' and 'boundary' are supported for nonexistent times,
+#' `roll_dst` values of 'error', 'pre', and 'post' are supported for ambiguous times.
 #' * [`format_ISO8601()`][lubridate::format_ISO8601()]
 #' * [`hour()`][lubridate::hour()]
 #' * [`is.Date()`][lubridate::is.Date()]
-#' * [`is.instant()`][lubridate::is.instant()]
 #' * [`is.POSIXct()`][lubridate::is.POSIXct()]
+#' * [`is.instant()`][lubridate::is.instant()]
 #' * [`is.timepoint()`][lubridate::is.timepoint()]
 #' * [`isoweek()`][lubridate::isoweek()]
 #' * [`isoyear()`][lubridate::isoyear()]
@@ -259,6 +262,8 @@
 #' * [`my()`][lubridate::my()]: `locale` argument not supported
 #' * [`myd()`][lubridate::myd()]: `locale` argument not supported
 #' * [`parse_date_time()`][lubridate::parse_date_time()]: `quiet = FALSE` is not supported
+#' Available formats are H, I, j, M, S, U, w, W, y, Y, R, T.
+#' On Linux and OS X additionally a, A, b, B, Om, p, r are available.
 #' * [`pm()`][lubridate::pm()]
 #' * [`qday()`][lubridate::qday()]
 #' * [`quarter()`][lubridate::quarter()]
@@ -268,6 +273,7 @@
 #' * [`tz()`][lubridate::tz()]
 #' * [`wday()`][lubridate::wday()]
 #' * [`week()`][lubridate::week()]
+#' * [`with_tz()`][lubridate::with_tz()]
 #' * [`yday()`][lubridate::yday()]
 #' * [`ydm()`][lubridate::ydm()]: `locale` argument not supported
 #' * [`ydm_h()`][lubridate::ydm_h()]: `locale` argument not supported
@@ -315,8 +321,10 @@
 #' * [`str_dup()`][stringr::str_dup()]
 #' * [`str_ends()`][stringr::str_ends()]
 #' * [`str_length()`][stringr::str_length()]
-#' * `str_like()`: not yet in a released version of `stringr`, but it is supported in `arrow`
+#' * [`str_like()`][stringr::str_like()]
 #' * [`str_pad()`][stringr::str_pad()]
+#' * [`str_remove()`][stringr::str_remove()]
+#' * [`str_remove_all()`][stringr::str_remove_all()]
 #' * [`str_replace()`][stringr::str_replace()]
 #' * [`str_replace_all()`][stringr::str_replace_all()]
 #' * [`str_split()`][stringr::str_split()]: Case-insensitive string splitting and splitting into 0 parts not supported

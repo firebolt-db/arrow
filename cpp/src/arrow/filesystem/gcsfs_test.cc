@@ -46,7 +46,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <iostream>
 #include <random>
 #include <string>
 #include <thread>
@@ -55,16 +54,13 @@
 #include "arrow/filesystem/path_util.h"
 #include "arrow/filesystem/test_util.h"
 #include "arrow/testing/gtest_util.h"
+#include "arrow/testing/matchers.h"
 #include "arrow/testing/util.h"
 #include "arrow/util/future.h"
 #include "arrow/util/key_value_metadata.h"
 
 namespace arrow {
 namespace fs {
-/// Custom comparison for FileInfo, we need this to use complex googletest matchers.
-inline bool operator==(const FileInfo& a, const FileInfo& b) {
-  return a.path() == b.path() && a.type() == b.type();
-}
 
 namespace {
 
@@ -268,7 +264,8 @@ class GcsIntegrationTest : public ::testing::Test {
         const auto filename =
             internal::ConcatAbstractPath(folder, "test-file-" + std::to_string(i));
         CreateFile(fs.get(), filename, filename);
-        result.contents.push_back(arrow::fs::File(filename));
+        ARROW_ASSIGN_OR_RAISE(auto file_info, fs->GetFileInfo(filename));
+        result.contents.push_back(std::move(file_info));
       }
     }
     return result;
@@ -1320,6 +1317,22 @@ TEST_F(GcsIntegrationTest, OpenInputFileRandomSeek) {
   }
 }
 
+TEST_F(GcsIntegrationTest, OpenInputFileIoContext) {
+  auto fs = GcsFileSystem::Make(TestGcsOptions());
+
+  // Create a test file.
+  const auto path = PreexistingBucketPath() + "OpenInputFileIoContext/object-name";
+  std::shared_ptr<io::OutputStream> output;
+  ASSERT_OK_AND_ASSIGN(output, fs->OpenOutputStream(path, {}));
+  const std::string contents = "The quick brown fox jumps over the lazy dog";
+  ASSERT_OK(output->Write(contents.data(), contents.size()));
+  ASSERT_OK(output->Close());
+
+  std::shared_ptr<io::RandomAccessFile> file;
+  ASSERT_OK_AND_ASSIGN(file, fs->OpenInputFile(path));
+  EXPECT_EQ(fs->io_context().external_id(), file->io_context().external_id());
+}
+
 TEST_F(GcsIntegrationTest, OpenInputFileInfo) {
   auto fs = GcsFileSystem::Make(TestGcsOptions());
 
@@ -1371,12 +1384,24 @@ TEST_F(GcsIntegrationTest, OpenInputFileClosed) {
 
 TEST_F(GcsIntegrationTest, TestFileSystemFromUri) {
   // Smoke test for FileSystemFromUri
-  ASSERT_OK_AND_ASSIGN(auto fs, FileSystemFromUri(std::string("gs://anonymous@") +
-                                                  PreexistingBucketPath()));
+  std::string path;
+  ASSERT_OK_AND_ASSIGN(
+      auto fs,
+      FileSystemFromUri(std::string("gs://anonymous@") + PreexistingBucketPath(), &path));
   EXPECT_EQ(fs->type_name(), "gcs");
+  EXPECT_EQ(path, PreexistingBucketName());
+  ASSERT_OK_AND_ASSIGN(
+      path, fs->PathFromUri(std::string("gs://anonymous@") + PreexistingBucketPath()));
+  EXPECT_EQ(path, PreexistingBucketName());
   ASSERT_OK_AND_ASSIGN(auto fs2, FileSystemFromUri(std::string("gcs://anonymous@") +
                                                    PreexistingBucketPath()));
   EXPECT_EQ(fs2->type_name(), "gcs");
+  ASSERT_THAT(fs->PathFromUri("/foo/bar"),
+              Raises(StatusCode::Invalid, testing::HasSubstr("Expected a URI")));
+  ASSERT_THAT(
+      fs->PathFromUri("s3:///foo/bar"),
+      Raises(StatusCode::Invalid,
+             testing::HasSubstr("expected a URI with one of the schemes (gs, gcs)")));
 }
 
 }  // namespace
