@@ -392,49 +392,50 @@ class SystemAllocator {
   }
 };
 
+// Firebolt Allocator that uses operator new/delete and other tracked allocations
+// functions to ensure proper MemoryTracker integration
 class FireboltAllocator {
  public:
-  // Allocate memory according to the alignment requirements for Arrow
-  // (as of May 2016 64 bytes)
-  static Status AllocateAligned(int64_t size, uint8_t** out) {
+  static Status AllocateAligned(int64_t size, int64_t alignment, uint8_t** out) {
     if (size == 0) {
-      *out = zero_size_area;
+      *out = memory_pool::internal::kZeroSizeArea;
       return Status::OK();
     }
-    *out = new (std::align_val_t(kAlignment)) uint8_t[size * sizeof(uint8_t)];
+    *out = new (static_cast<std::align_val_t>(alignment)) uint8_t[size * sizeof(uint8_t)];
     return Status::OK();
   }
 
-  static Status ReallocateAligned(int64_t old_size, int64_t new_size, uint8_t** ptr) {
+  static Status ReallocateAligned(int64_t old_size, int64_t new_size, int64_t alignment,
+                                  uint8_t** ptr) {
     uint8_t* previous_ptr = *ptr;
-    if (previous_ptr == zero_size_area) {
+    if (previous_ptr == memory_pool::internal::kZeroSizeArea) {
       DCHECK_EQ(old_size, 0);
-      return AllocateAligned(new_size, ptr);
+      return AllocateAligned(new_size, alignment, ptr);
     }
     if (new_size == 0) {
-      DeallocateAligned(previous_ptr, old_size);
-      *ptr = zero_size_area;
+      DeallocateAligned(previous_ptr, old_size, alignment);
+      *ptr = memory_pool::internal::kZeroSizeArea;
       return Status::OK();
     }
     // Note: We cannot use realloc() here as it doesn't guarantee alignment.
 
     // Allocate new chunk
     uint8_t* out = nullptr;
-    RETURN_NOT_OK(AllocateAligned(new_size, &out));
+    RETURN_NOT_OK(AllocateAligned(new_size, alignment, &out));
     DCHECK(out);
     // Copy contents and release old memory chunk
     memcpy(out, *ptr, static_cast<size_t>(std::min(new_size, old_size)));
 
-    operator delete[](*ptr, std::align_val_t(kAlignment));
+    operator delete[](*ptr, static_cast<std::align_val_t>(alignment));
     *ptr = out;
     return Status::OK();
   }
 
-  static void DeallocateAligned(uint8_t* ptr, int64_t size) {
-    if (ptr == zero_size_area) {
+  static void DeallocateAligned(uint8_t* ptr, int64_t size, int64_t alignment) {
+    if (ptr == memory_pool::internal::kZeroSizeArea) {
       DCHECK_EQ(size, 0);
     } else {
-      operator delete[](ptr, std::align_val_t(kAlignment));
+      operator delete[](ptr, static_cast<std::align_val_t>(alignment));
     }
   }
 
