@@ -440,11 +440,12 @@ class FireboltAllocator {
   }
 
   static void ReleaseUnused() {
-#ifdef __GLIBC__
-    // The return value of malloc_trim is not an error but to inform
-    // you if memory was actually released or not, which we do not care about here
-    ARROW_UNUSED(malloc_trim(0));
+    // the FireboltAllocator uses jemalloc under the hood, so do the same as
+    // JemallocAllocator::ReleaseUnused
+#ifndef ARROW_JEMALLOC
+    static_assert(false, "FireboltAllocator requires ARROW_JEMALLOC");
 #endif
+    memory_pool::internal::JemallocAllocator::ReleaseUnused();
   }
 
   static void PrintStats() { }
