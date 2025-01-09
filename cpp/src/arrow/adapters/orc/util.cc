@@ -237,17 +237,22 @@ Status AppendTimestampBatch(liborc::ColumnVectorBatch* column_vector_batch,
   // assign a C string with a description of the error to error_message. Otherwise,
   // error_message remains nullptr.
   const char* error_message = nullptr;
-  auto transform_timestamp = [seconds, nanos, &error_message](int64_t index) {
+  auto transform_timestamp = [seconds, nanos, &error_message,
+                              valid_bytes](int64_t index) {
+    // NULL values are backed by (potentially) garbage values
+    if (valid_bytes && valid_bytes[index] == 0) {
+      return static_cast<int64_t>(0);
+    }
     // Convert ORC's timestamp column with a resolution of nanoseconds to Arrow's
     // timestamp column with a resolution of microseconds by truncating to microseconds.
     int64_t seconds_us;
-    if (mulOverflow(seconds[index], kOneSecondMicros, &seconds_us)) { [[unlikely]]
+    if (mulOverflow(seconds[index], kOneSecondMicros, &seconds_us)) [[unlikely]] {
       error_message =
           "Overflow in ORC reader during conversion from seconds to microseconds";
     }
     const int64_t subseconds_us = nanos[index] / kOneMicroNanos;
     int64_t result;
-    if (addOverflow(seconds_us, subseconds_us, &result)) { [[unlikely]]
+    if (addOverflow(seconds_us, subseconds_us, &result)) [[unlikely]] {
       error_message =
           "Overflow in ORC reader when adding the microseconds to the seconds";
     }
