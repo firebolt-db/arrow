@@ -360,6 +360,7 @@ set(ARROW_SRCS
     chunk_resolver.cc
     compare.cc
     config.cc
+    corded_buffer.cc
     datum.cc
     device.cc
     device_allocation_type_set.cc
@@ -1258,7 +1259,10 @@ add_arrow_test(array_test
                array/array_view_test.cc
                array/statistics_test.cc)
 
-add_arrow_test(buffer_test)
+add_arrow_test(buffer_test
+               SOURCES
+               buffer_test.cc
+               corded_buffer_test.cc)
 
 if(ARROW_IPC)
   # The extension type unit tests require IPC / Flatbuffers support

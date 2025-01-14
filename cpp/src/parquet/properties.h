@@ -96,6 +96,13 @@ class PARQUET_EXPORT ReaderProperties {
   void enable_read_dense_for_nullable() { read_dense_for_nullable_ = true; }
   void disable_read_dense_for_nullable() { read_dense_for_nullable_ = false; }
 
+  /// Whether Firebolt's non-contiguous "corded buffers" are used to represent
+  /// the parquet file in memory rather than a contiguous memory area
+  bool firebolt_corded_buffers() const { return firebolt_corded_buffers_; }
+  /// Inform the parquet reader that its RandomAccessFile uses Firebolt's
+  /// non-contiguous "corded buffers"
+  void use_firebolt_corded_buffers() { firebolt_corded_buffers_ = true; }
+
   /// Return the size of the buffered stream buffer.
   int64_t buffer_size() const { return buffer_size_; }
   /// Set the size of the buffered stream buffer in bytes.
@@ -148,6 +155,7 @@ class PARQUET_EXPORT ReaderProperties {
   bool page_checksum_verification_ = false;
   // Used with a RecordReader.
   bool read_dense_for_nullable_ = false;
+  bool firebolt_corded_buffers_ = false;
   size_t footer_read_size_ = kDefaultFooterReadSize;
   std::shared_ptr<FileDecryptionProperties> file_decryption_properties_;
 };

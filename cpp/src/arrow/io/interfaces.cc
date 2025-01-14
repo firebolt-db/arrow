@@ -141,6 +141,13 @@ Result<Iterator<std::shared_ptr<Buffer>>> MakeInputStreamIterator(
   return Iterator<std::shared_ptr<Buffer>>(InputStreamBlockIterator(stream, block_size));
 }
 
+Result<int64_t> CordedInputStream::Read(int64_t nbytes, void* out) {
+  return Status::NotImplemented("CordedInputStream::Read");
+}
+Result<std::shared_ptr<Buffer>> CordedInputStream::Read(int64_t nbytes) {
+  return Status::NotImplemented("CordedInputStream::Read");
+}
+
 struct RandomAccessFile::Impl {
   std::mutex lock_;
 };
@@ -193,6 +200,15 @@ std::vector<Future<std::shared_ptr<Buffer>>> RandomAccessFile::ReadManyAsync(
 // Default WillNeed() implementation: no-op
 Status RandomAccessFile::WillNeed(const std::vector<ReadRange>& ranges) {
   return Status::OK();
+}
+
+Result<int64_t> CordedRandomAccessFile::ReadAt(int64_t position, int64_t nbytes,
+                                               void* out) {
+  return Status::NotImplemented("CordedRandomAccessFile::ReadAt");
+}
+Result<std::shared_ptr<Buffer>> CordedRandomAccessFile::ReadAt(int64_t position,
+                                                               int64_t nbytes) {
+  return Status::NotImplemented("CordedRandomAccessFile::ReadAt");
 }
 
 Status Writable::Write(std::string_view data) {
