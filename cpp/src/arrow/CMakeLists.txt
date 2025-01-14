@@ -509,6 +509,7 @@ set(ARROW_UTIL_SRCS
     util/byte_size.cc
     util/cancel.cc
     util/compression.cc
+    util/corded_buffer.cc
     util/counting_semaphore.cc
     util/cpu_info.cc
     util/crc32.cc
