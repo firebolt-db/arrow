@@ -994,7 +994,9 @@ TYPED_TEST(TypedTestBuffer, TypedResize) {
   ASSERT_EQ(832, buf->capacity());
 }
 
-TYPED_TEST(TypedTestBuffer, ResizeOOM) {
+// Firebolt: disabled test because arrow unit tests don't use packdb's overwritten operator new
+// that includes memory tracking / throwing OOM exceptions, but just uses the default implementation
+TYPED_TEST(TypedTestBuffer, DISABLED_ResizeOOM) {
 // This test doesn't play nice with AddressSanitizer
 #ifndef ADDRESS_SANITIZER
   // realloc fails, even though there may be no explicit limit

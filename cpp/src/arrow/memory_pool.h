@@ -248,6 +248,10 @@ class ARROW_EXPORT ProxyMemoryPool : public MemoryPool {
 /// \brief Return a process-wide memory pool based on the system allocator.
 ARROW_EXPORT MemoryPool* system_memory_pool();
 
+/// \brief Return a process-wide memory pool based on operator new.
+/// When used in packdb, this includes Firebolt's memory tracking.
+ARROW_EXPORT Status firebolt_memory_pool(MemoryPool** out);
+
 /// \brief Return a process-wide memory pool based on jemalloc.
 ///
 /// May return NotImplemented if jemalloc is not available.

@@ -67,7 +67,9 @@ TYPED_TEST_SUITE_P(TestMemoryPool);
 
 TYPED_TEST_P(TestMemoryPool, MemoryTracking) { this->TestMemoryTracking(); }
 
-TYPED_TEST_P(TestMemoryPool, OOM) {
+// Firebolt: disabled because FireboltMemoryPool uses operator new, which is not
+// overwritten to use memory tracking in the arrow unit tests, only in packdb
+TYPED_TEST_P(TestMemoryPool, DISABLED_OOM) {
 #ifndef ADDRESS_SANITIZER
   this->TestOOM();
 #endif
@@ -77,7 +79,7 @@ TYPED_TEST_P(TestMemoryPool, Reallocate) { this->TestReallocate(); }
 
 TYPED_TEST_P(TestMemoryPool, Alignment) { this->TestAlignment(); }
 
-REGISTER_TYPED_TEST_SUITE_P(TestMemoryPool, MemoryTracking, OOM, Reallocate, Alignment);
+REGISTER_TYPED_TEST_SUITE_P(TestMemoryPool, MemoryTracking, DISABLED_OOM, Reallocate, Alignment);
 
 INSTANTIATE_TYPED_TEST_SUITE_P(Default, TestMemoryPool, DefaultMemoryPoolFactory);
 INSTANTIATE_TYPED_TEST_SUITE_P(System, TestMemoryPool, SystemMemoryPoolFactory);
@@ -94,6 +96,8 @@ TEST(DefaultMemoryPool, Identity) {
   // The default memory pool is pointer-identical to one of the backend-specific pools.
   MemoryPool* pool = default_memory_pool();
   std::vector<MemoryPool*> specific_pools = {system_memory_pool()};
+  specific_pools.push_back(nullptr);
+  ASSERT_OK(firebolt_memory_pool(&specific_pools.back()));
 #ifdef ARROW_JEMALLOC
   specific_pools.push_back(nullptr);
   ASSERT_OK(jemalloc_memory_pool(&specific_pools.back()));
