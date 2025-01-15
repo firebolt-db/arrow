@@ -378,5 +378,40 @@ Status BufferReader::DoSeek(int64_t position) {
   return Status::OK();
 }
 
+/**************************************************************************/
+
+CordedBufferReader::CordedBufferReader(CordedBuffer buffer, size_t size)
+    : buffer_(buffer), size_(size), position_(0), is_open_(true) {}
+
+Status CordedBufferReader::Close() {
+  is_open_ = false;
+  return Status::OK();
+}
+
+Result<int64_t> CordedBufferReader::Tell() const {
+  RETURN_NOT_OK(CheckClosed());
+  return position_;
+}
+
+Status CordedBufferReader::Advance(int64_t nbytes) {
+  RETURN_NOT_OK(CheckClosed());
+  position_ += nbytes;
+  buffer_.Advance(nbytes);
+  return Status::OK();
+}
+
+Result<std::string_view> CordedBufferReader::Peek(int64_t nbytes) {
+  RETURN_NOT_OK(CheckClosed());
+  return buffer_.Peek(nbytes);
+}
+
+Result<CordedBuffer> CordedBufferReader::ReadCorded(int64_t nbytes) {
+  RETURN_NOT_OK(CheckClosed());
+  auto result = buffer_;
+  position_ += nbytes;
+  buffer_.Advance(nbytes);
+  return result;
+}
+
 }  // namespace io
 }  // namespace arrow

@@ -31,6 +31,9 @@
 #include "arrow/util/visibility.h"
 
 namespace arrow {
+
+class CordedBuffer;
+
 namespace io {
 
 struct ReadRange {
@@ -210,7 +213,7 @@ class ARROW_EXPORT InputStream : virtual public FileInterface, virtual public Re
   /// \brief Advance or skip stream indicated number of bytes
   /// \param[in] nbytes the number to move forward
   /// \return Status
-  Status Advance(int64_t nbytes);
+  virtual Status Advance(int64_t nbytes);
 
   /// \brief Return zero-copy string_view to upcoming bytes.
   ///
@@ -242,6 +245,21 @@ class ARROW_EXPORT InputStream : virtual public FileInterface, virtual public Re
 
  protected:
   InputStream() = default;
+};
+
+/// CordedBuffer version of InputStream, extending the interface by a corded version of
+/// Read. The non-corded versions return NotImplemented errors.
+class ARROW_EXPORT CordedInputStream : public InputStream {
+ public:
+  // Read up to `nbytes` bytes from the underlying corded buffer at its current position
+  virtual Result<CordedBuffer> ReadCorded(int64_t nbytes) = 0;
+
+  // Provide NotImplemented versions of the non-corded read functions
+  Result<int64_t> Read(int64_t nbytes, void* out) final;
+  Result<std::shared_ptr<Buffer>> Read(int64_t nbytes) final;
+
+  // Not applicable
+  bool supports_zero_copy() const override { return false; }
 };
 
 class ARROW_EXPORT RandomAccessFile : public InputStream, public Seekable {

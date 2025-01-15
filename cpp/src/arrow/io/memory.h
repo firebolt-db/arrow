@@ -27,6 +27,7 @@
 #include "arrow/io/concurrency.h"
 #include "arrow/io/interfaces.h"
 #include "arrow/type_fwd.h"
+#include "arrow/util/corded_buffer.h"
 #include "arrow/util/visibility.h"
 
 namespace arrow {
@@ -188,6 +189,41 @@ class ARROW_EXPORT BufferReader
 
   std::shared_ptr<Buffer> buffer_;
   const uint8_t* data_;
+  int64_t size_;
+  int64_t position_;
+  bool is_open_;
+};
+
+// CordedBuffer version of BufferReader, for use during parquet page header decoding &
+// page decompression. Unlike BufferReader, this class only implements the InputStream
+// interfaces and does *NOT* do internal synchronisation, as we do not require those. It
+// is therefore *NOT* thread-safe.
+class ARROW_EXPORT CordedBufferReader : public CordedInputStream {
+ public:
+  /// Instantiate from a CordedBuffer. Does not copy any data.
+  explicit CordedBufferReader(CordedBuffer buffer, size_t size);
+  bool closed() const override { return !is_open_; }
+  CordedBuffer buffer() const { return buffer_; }
+
+  // Corded version of Read(nbytes)
+  Result<CordedBuffer> ReadCorded(int64_t nbytes) override;
+
+  // Override InputStream::Advance
+  Status Advance(int64_t nbytes) override;
+
+  Status Close() override;
+  Result<std::string_view> Peek(int64_t nbytes) override;
+  Result<int64_t> Tell() const override;
+
+ protected:
+  Status CheckClosed() const {
+    if (!is_open_) {
+      return Status::Invalid("Operation forbidden on closed CordedBufferReader");
+    }
+    return Status::OK();
+  }
+
+  CordedBuffer buffer_;
   int64_t size_;
   int64_t position_;
   bool is_open_;

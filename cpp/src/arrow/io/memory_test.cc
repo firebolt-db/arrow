@@ -316,6 +316,51 @@ TEST(TestBufferReader, Lifetime) {
   });
 }
 
+TEST(TestCordedBufferReader, Basic) {
+  std::string data = "data12345";
+  std::vector<std::byte> bytes(data.size());
+  // Fill vector with data
+  std::generate(bytes.begin(), bytes.end(), [pos = 0, &data]() mutable {
+    return static_cast<std::byte>(data[pos++]);
+  });
+
+  // Create slices of 3 bytes each
+  auto create_slice = [&data](size_t offset, size_t length) {
+    return std::span{reinterpret_cast<std::byte*>(data.data()) + offset, length};
+  };
+  std::vector<std::span<std::byte>> slices = {create_slice(0, 3), create_slice(3, 3),
+                                              create_slice(6, 3)};
+
+  CordedBuffer buffer(std::span{slices.begin(), slices.size()});
+  CordedBufferReader reader(buffer, buffer.RemainingBytes());
+  std::string_view view;
+
+  ASSERT_OK_AND_ASSIGN(view, reader.Peek(4));
+  // Peek does not cross slices!
+  ASSERT_EQ(3, view.size());
+  ASSERT_EQ(data.substr(0, 3), std::string(view));
+  // But PeekBuffer does:
+  std::shared_ptr<Buffer> peeked = reader.buffer().PeekBuffer(4);
+  ASSERT_EQ(4, peeked->size());
+  ASSERT_EQ(data.substr(0, 4), peeked->ToString());
+
+  // And so does ReadCorded()
+  CordedBuffer res{{}};
+  ASSERT_OK_AND_ASSIGN(res, reader.ReadCorded(4));
+  ASSERT_EQ(4, reader.Tell());
+  // It essentially returns a copy of the reader's buffer and advances the reader's buffer
+  ASSERT_EQ(res.slice(0).data(), buffer.slice(0).data());
+  ASSERT_EQ(res.slice(1).data(), buffer.slice(1).data());
+  ASSERT_EQ(0, res.slice_idx());
+  ASSERT_EQ(0, res.slice_offset());
+  ASSERT_EQ(1, reader.buffer().slice_idx());
+  ASSERT_EQ(1, reader.buffer().slice_offset());
+
+  ASSERT_OK_AND_ASSIGN(view, reader.Peek(4));
+  ASSERT_EQ(2, view.size());
+  ASSERT_EQ(data.substr(4, 2), std::string(view));
+}
+
 TEST(TestRandomAccessFile, GetStream) {
   std::string data = "data1data2data3data4data5";
 
@@ -580,8 +625,7 @@ class TestTransformInputStream : public ::testing::Test {
     auto stream = std::make_shared<TransformInputStream>(
         std::make_shared<BufferReader>(src), this->transform());
     std::shared_ptr<Buffer> actual;
-    AccumulateReads(
-        stream, [&]() -> int64_t { return chunk_sizes(gen); }, &actual);
+    AccumulateReads(stream, [&]() -> int64_t { return chunk_sizes(gen); }, &actual);
     AssertBufferEqual(*actual, *expected);
   }
 
@@ -613,8 +657,7 @@ class TestTransformInputStream : public ::testing::Test {
 
   void AccumulateReads(const std::shared_ptr<InputStream>& stream, int64_t chunk_size,
                        std::shared_ptr<Buffer>* out) {
-    return AccumulateReads(
-        stream, [=]() { return chunk_size; }, out);
+    return AccumulateReads(stream, [=]() { return chunk_size; }, out);
   }
 
  protected:
