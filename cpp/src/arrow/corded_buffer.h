@@ -59,7 +59,7 @@ class CordedBuffer {
         return;
       }
       if (remaining_to_skip < available_in_slice) {
-        slice_offset_ = remaining_to_skip + this_slice_offset;
+        slice_offset_ = static_cast<int32_t>(remaining_to_skip + this_slice_offset);
         return;
       }
       skipped += available_in_slice;
@@ -73,7 +73,7 @@ class CordedBuffer {
             slice_offset_ == static_cast<int32_t>(slices_.back().size()));
   }
 
-  size_t num_slices() const { return slices_.size(); }
+  int32_t num_slices() const { return slices_.size(); }
 
   /// Raw access to a particular slice.
   Slice slice(int32_t slice_idx) const;

@@ -21,7 +21,7 @@ std::shared_ptr<Buffer> arrow::CordedBuffer::PeekBuffer(int64_t nbytes) const {
 }
 
 CordedBuffer::Slice CordedBuffer::slice(int32_t slice_idx) const {
-  if (slice_idx >= slices_.size()) {
+  if (slice_idx < 0 || static_cast<size_t>(slice_idx) >= slices_.size()) {
     throw std::runtime_error("out-of-bounds slice access");
   }
   return slices_[slice_idx];
@@ -34,7 +34,7 @@ int64_t TryMemcpyFromCorded(void* dest, const CordedBuffer& src, int64_t nbytes)
   char* curr_dest = reinterpret_cast<char*>(dest);
   int64_t copied = 0;
   auto offset = src.slice_offset();  // need to skip this many bytes from current slice
-  for (size_t idx = src.slice_idx(); idx < src.num_slices(); ++idx) {
+  for (auto idx = src.slice_idx(); idx < src.num_slices(); ++idx) {
     const auto& slice = src.slice(idx);
     int64_t to_copy =
         std::min(/* available */ static_cast<int64_t>(slice.size()) - offset,
