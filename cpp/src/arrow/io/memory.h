@@ -24,10 +24,10 @@
 #include <string_view>
 #include <vector>
 
+#include "arrow/corded_buffer.h"
 #include "arrow/io/concurrency.h"
 #include "arrow/io/interfaces.h"
 #include "arrow/type_fwd.h"
-#include "arrow/util/corded_buffer.h"
 #include "arrow/util/visibility.h"
 
 namespace arrow {

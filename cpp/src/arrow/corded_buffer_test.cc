@@ -2,9 +2,8 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstddef>
-#include <memory>
 
-#include "arrow/util/corded_buffer.h"
+#include "arrow/corded_buffer.h"
 
 namespace arrow::internal {
 

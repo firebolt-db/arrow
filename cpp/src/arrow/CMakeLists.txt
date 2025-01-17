@@ -368,6 +368,7 @@ set(ARROW_SRCS
     chunk_resolver.cc
     compare.cc
     config.cc
+    corded_buffer.cc
     datum.cc
     device.cc
     device_allocation_type_set.cc
@@ -509,7 +510,6 @@ set(ARROW_UTIL_SRCS
     util/byte_size.cc
     util/cancel.cc
     util/compression.cc
-    util/corded_buffer.cc
     util/counting_semaphore.cc
     util/cpu_info.cc
     util/crc32.cc
@@ -1189,7 +1189,10 @@ add_arrow_test(array_test
                PRECOMPILED_HEADERS
                "$<$<COMPILE_LANGUAGE:CXX>:arrow/testing/pch.h>")
 
-add_arrow_test(buffer_test)
+add_arrow_test(buffer_test
+               SOURCES
+               buffer_test.cc
+               corded_buffer_test.cc)
 
 if(ARROW_IPC)
   # The extension type unit tests require IPC / Flatbuffers support
