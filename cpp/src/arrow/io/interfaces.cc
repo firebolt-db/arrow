@@ -202,6 +202,15 @@ Status RandomAccessFile::WillNeed(const std::vector<ReadRange>& ranges) {
   return Status::OK();
 }
 
+Result<int64_t> CordedRandomAccessFile::ReadAt(int64_t position, int64_t nbytes,
+                                               void* out) {
+  return Status::NotImplemented("CordedRandomAccessFile::ReadAt");
+}
+Result<std::shared_ptr<Buffer>> CordedRandomAccessFile::ReadAt(int64_t position,
+                                                               int64_t nbytes) {
+  return Status::NotImplemented("CordedRandomAccessFile::ReadAt");
+}
+
 Status Writable::Write(std::string_view data) {
   return Write(data.data(), static_cast<int64_t>(data.size()));
 }

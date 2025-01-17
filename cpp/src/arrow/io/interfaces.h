@@ -353,6 +353,18 @@ class ARROW_EXPORT RandomAccessFile : public InputStream, public Seekable {
   std::unique_ptr<Impl> interface_impl_;
 };
 
+/// CordedBuffer version of RandomAccessFile, extending the interface by a corded version
+/// of Read and ReadAt.  The non-corded versions returns NotImplemented errors.
+class ARROW_EXPORT CordedRandomAccessFile : public CordedInputStream,
+                                            public RandomAccessFile {
+ public:
+  virtual Result<CordedBuffer> ReadCordedAt(int64_t position, int64_t nbytes) = 0;
+
+  // Provide NotImplemented versions of the non-corded read functions
+  Result<int64_t> ReadAt(int64_t position, int64_t nbytes, void* out) final;
+  Result<std::shared_ptr<Buffer>> ReadAt(int64_t position, int64_t nbytes) final;
+};
+
 class ARROW_EXPORT WritableFile : public OutputStream, public Seekable {
  public:
   virtual Status WriteAt(int64_t position, const void* data, int64_t nbytes) = 0;
