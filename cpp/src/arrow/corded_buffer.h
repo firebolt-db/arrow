@@ -21,6 +21,7 @@ class CordedBuffer {
   /// How many bytes remain in the current slice
   int64_t RemainingBytesInCurrentSlice() const {
     if (slices_.empty()) return 0;
+    if (slice_idx_ >= static_cast<int32_t>(slices_.size())) return 0;
     return static_cast<int64_t>(slices_[slice_idx_].size()) - slice_offset_;
   }
 
