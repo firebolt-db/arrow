@@ -81,19 +81,19 @@ RUN /arrow/ci/scripts/install_gcs_testbench.sh default
 COPY ci/scripts/install_sccache.sh /arrow/ci/scripts/
 RUN /arrow/ci/scripts/install_sccache.sh unknown-linux-musl /usr/local/bin
 
-ENV ARROW_ACERO=ON \
+ENV ARROW_ACERO=OFF \
     ARROW_AZURE=OFF \
     ARROW_BUILD_TESTS=ON \
-    ARROW_DATASET=ON \
-    ARROW_FLIGHT=ON \
-    ARROW_GANDIVA=ON \
-    ARROW_GCS=ON \
-    ARROW_HDFS=ON \
+    ARROW_DATASET=OFF \
+    ARROW_FLIGHT=OFF \
+    ARROW_GANDIVA=OFF \
+    ARROW_GCS=OFF \
+    ARROW_HDFS=OFF \
     ARROW_HOME=/usr/local \
     ARROW_INSTALL_NAME_RPATH=OFF \
     ARROW_ORC=ON \
     ARROW_PARQUET=ON \
-    ARROW_S3=ON \
+    ARROW_S3=OFF \
     ARROW_USE_CCACHE=ON \
     ARROW_WITH_BROTLI=ON \
     ARROW_WITH_BZ2=ON \
