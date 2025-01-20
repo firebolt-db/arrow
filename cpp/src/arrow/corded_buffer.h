@@ -73,7 +73,7 @@ class CordedBuffer {
             slice_offset_ == static_cast<int32_t>(slices_.back().size()));
   }
 
-  int32_t num_slices() const { return slices_.size(); }
+  int32_t num_slices() const { return static_cast<int32_t>(slices_.size()); }
 
   /// Raw access to a particular slice.
   Slice slice(int32_t slice_idx) const;
