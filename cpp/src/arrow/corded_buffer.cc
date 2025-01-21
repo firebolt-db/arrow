@@ -8,7 +8,9 @@ std::shared_ptr<Buffer> arrow::CordedBuffer::PeekBuffer(int64_t nbytes) const {
   const auto available = RemainingBytesInCurrentSlice();
   if (available >= nbytes || slice_idx_ + 1 == static_cast<int64_t>(slices_.size())) {
     // We are lucky: the entire read range fits into a single buffer
-    return std::make_shared<Buffer>(Peek(nbytes));
+    auto range = Peek(nbytes);
+    return std::make_shared<Buffer>(reinterpret_cast<const uint8_t*>(range.data()),
+                                    range.size());
   }
 
   std::string data;
@@ -39,7 +41,7 @@ int64_t TryMemcpyFromCorded(void* dest, const CordedBuffer& src, int64_t nbytes)
     int64_t to_copy =
         std::min(/* available */ static_cast<int64_t>(slice.size()) - offset,
                  /* required */ nbytes - copied);
-    memcpy(curr_dest, reinterpret_cast<char*>(slice.data()) + offset, to_copy);
+    memcpy(curr_dest, reinterpret_cast<const char*>(slice.data()) + offset, to_copy);
     copied += to_copy;
     if (copied == nbytes) {
       break;

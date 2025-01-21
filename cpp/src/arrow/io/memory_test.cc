@@ -326,10 +326,10 @@ TEST(TestCordedBufferReader, Basic) {
 
   // Create slices of 3 bytes each
   auto create_slice = [&data](size_t offset, size_t length) {
-    return std::span{reinterpret_cast<std::byte*>(data.data()) + offset, length};
+    return std::span{reinterpret_cast<const std::byte*>(data.data()) + offset, length};
   };
-  std::vector<std::span<std::byte>> slices = {create_slice(0, 3), create_slice(3, 3),
-                                              create_slice(6, 3)};
+  std::vector<std::span<const std::byte>> slices = {
+      create_slice(0, 3), create_slice(3, 3), create_slice(6, 3)};
 
   CordedBuffer buffer(std::span{slices.begin(), slices.size()});
   CordedBufferReader reader(buffer, buffer.RemainingBytes());

@@ -12,7 +12,7 @@ class CordedBuffer {
  public:
   /// A corded buffer consists of a number of slices, which are contiguous memory regions.
   /// The lengths of the slices may differ.
-  using Slice = std::span<std::byte>;
+  using Slice = std::span<const std::byte>;
 
   explicit CordedBuffer(std::span<Slice> slices, int32_t slice_idx = 0,
                         int32_t slice_offset = 0)
@@ -36,9 +36,9 @@ class CordedBuffer {
 
   /// Zero-copy peek into *the current slice* only without advancing the position.  Will
   /// return at most `RemainingBytesInCurrentSlice` bytes.
-  std::string_view Peek(int64_t nbytes) const {
-    if (slices_.empty()) return {};
-    return {reinterpret_cast<char*>(slices_[slice_idx_].data()) + slice_offset_,
+  std::span<const std::byte> Peek(int64_t nbytes) const {
+    if (slices_.empty() || slice_idx_ >= num_slices()) return {};
+    return {slices_[slice_idx_].data() + slice_offset_,
             static_cast<size_t>(std::min(nbytes, RemainingBytesInCurrentSlice()))};
   }
 

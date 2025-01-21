@@ -402,7 +402,8 @@ Status CordedBufferReader::Advance(int64_t nbytes) {
 
 Result<std::string_view> CordedBufferReader::Peek(int64_t nbytes) {
   RETURN_NOT_OK(CheckClosed());
-  return buffer_.Peek(nbytes);
+  std::span<const std::byte> view = buffer_.Peek(nbytes);
+  return std::string_view{reinterpret_cast<const char*>(view.data()), view.size()};
 }
 
 Result<CordedBuffer> CordedBufferReader::ReadCorded(int64_t nbytes) {
