@@ -95,12 +95,10 @@ namespace util {
 
 // Copies *up to* `nbytes` bytes the corded buffer `src`, starting at its current
 // position, to the contiguous buffer `dest` and returns how many bytes were copied.  This
-// may be less than `nbytes` if `src` has fewer than `nbytes` bytes remaining.
-[[nodiscard]] int64_t TryMemcpyFromCorded(void* dest, const CordedBuffer& src,
-                                          int64_t nbytes);
-
-// Like memcpy, however, we stop once `src` is exhausted. No error is returned.
-void* MemcpyFromCorded(void* dest, const CordedBuffer& src, size_t n);
+// may be less than `nbytes` if `src` has fewer than `nbytes` bytes remaining.  The source
+// buffer's position remains unchanged.
+[[nodiscard]] int64_t MemcpyFromCorded(void* dest, const CordedBuffer& src,
+                                       int64_t nbytes) noexcept;
 
 }  // namespace util
 }  // namespace arrow

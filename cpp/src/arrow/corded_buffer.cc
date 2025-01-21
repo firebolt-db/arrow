@@ -15,7 +15,7 @@ std::shared_ptr<Buffer> arrow::CordedBuffer::PeekBuffer(int64_t nbytes) const {
 
   std::string data;
   data.resize(nbytes);
-  auto actual_size = util::TryMemcpyFromCorded(data.data(), *this, nbytes);
+  auto actual_size = util::MemcpyFromCorded(data.data(), *this, nbytes);
   if (actual_size < nbytes) {
     data.resize(actual_size);
   }
@@ -31,7 +31,7 @@ CordedBuffer::Slice CordedBuffer::slice(int32_t slice_idx) const {
 
 namespace util {
 
-int64_t TryMemcpyFromCorded(void* dest, const CordedBuffer& src, int64_t nbytes) {
+int64_t MemcpyFromCorded(void* dest, const CordedBuffer& src, int64_t nbytes) noexcept {
   if (nbytes <= 0) return 0;
   char* curr_dest = reinterpret_cast<char*>(dest);
   int64_t copied = 0;
@@ -50,12 +50,6 @@ int64_t TryMemcpyFromCorded(void* dest, const CordedBuffer& src, int64_t nbytes)
     offset = 0;  // offset only applies to initial slice
   }
   return copied;
-}
-
-void* MemcpyFromCorded(void* dest, const CordedBuffer& src, size_t n) {
-  auto bytes_copied = TryMemcpyFromCorded(dest, src, static_cast<int64_t>(n));
-  static_cast<void>(bytes_copied);  // discard this information due to interface rigidity
-  return dest;
 }
 
 }  // namespace util

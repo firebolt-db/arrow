@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstddef>
+#include <string_view>
 
 #include "arrow/corded_buffer.h"
 
@@ -78,17 +79,68 @@ TEST(CordedBuffer, Simple) {
 
   std::string dest;
   dest.resize(100'000);
-  EXPECT_EQ(80'000, util::TryMemcpyFromCorded(dest.data(), buffer, 100'000));
+  EXPECT_EQ(80'000, util::MemcpyFromCorded(dest.data(), buffer, 100'000));
   EXPECT_EQ(
       std::string_view(dest.data(), 1024 + 1024 - 872),
       std::string(reinterpret_cast<const char*>(slices[12].data() + 872), 1024 - 872) +
           std::string(reinterpret_cast<const char*>(slices[13].data()), 1024));
-
+  // Position is unchanged
+  EXPECT_EQ(12, buffer.slice_idx());
+  EXPECT_EQ(872, buffer.slice_offset());
   // Peeking at the end is fine: we're past the final slice but it's ok
   buffer.Advance(buffer.RemainingBytes());
   EXPECT_EQ(buffer.num_slices(), buffer.slice_idx());
   EXPECT_EQ(0, buffer.slice_offset());
   EXPECT_EQ(buffer.Peek(10), std::span<const std::byte>{});
+}
+
+TEST(CordedBuffer, Memcpy) {
+  std::vector<std::span<const std::byte>> slices;
+  CordedBuffer empty(std::span{slices.begin(), slices.size()});
+
+  // Empty & negative memcpy works just fine and doesn't access the destination memory
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, empty, 0));
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, empty, -10));
+
+  // Trying to copy from an empty buffer works and doesn't access any pointers
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, empty, 10));
+
+  std::string data = "A bunch of test data to put into a corded buffer";
+  EXPECT_EQ(48, data.size());
+  const std::byte* data_ptr = reinterpret_cast<const std::byte*>(data.data());
+  slices = {{data_ptr, 10},
+            {data_ptr + 10, 10},
+            {data_ptr + 20, 10},
+            {data_ptr + 30, 10},
+            {data_ptr + 40, 8}};
+  CordedBuffer buffer(std::span{slices.begin(), slices.size()});
+  EXPECT_EQ(data.size(), buffer.RemainingBytes());
+
+  {
+    std::string dest(data.size(), '\0');
+    EXPECT_EQ(data.size(), util::MemcpyFromCorded(dest.data(), buffer, data.size()));
+    EXPECT_EQ(dest, data);
+  }
+
+  // Position is unchanged
+  EXPECT_EQ(0, buffer.slice_idx());
+  EXPECT_EQ(0, buffer.slice_offset());
+  EXPECT_EQ(data.size(), buffer.RemainingBytes());
+
+  buffer.Advance(15);
+  EXPECT_EQ(33, buffer.RemainingBytes());
+
+  // Only as much data as is available is copied.
+  {
+    std::string dest(data.size(), '\0');
+    EXPECT_EQ(33, util::MemcpyFromCorded(dest.data(), buffer, 100));
+    // EXPECT_STREQ ignores trailing nullbytes, unlike EXPECT_EQ(data.substr(15), dest)
+    EXPECT_STREQ(data.data() + 15, dest.data());
+  }
+
+  // Also here: 0 and negative nbytes are safe
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, 0));
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, -10));
 }
 
 }  // namespace arrow::internal
