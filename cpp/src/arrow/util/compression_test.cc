@@ -105,6 +105,35 @@ void CheckCodecRoundtrip(std::unique_ptr<Codec>& c1, std::unique_ptr<Codec>& c2,
   }
 }
 
+void CheckCordedCodecRoundtrip(std::unique_ptr<Codec>& compressor,
+                               std::unique_ptr<CordedCodec>& decompressor,
+                               const std::vector<uint8_t>& data, int64_t slice_size) {
+  int max_compressed_len =
+      static_cast<int>(compressor->MaxCompressedLen(data.size(), data.data()));
+  std::vector<uint8_t> compressed(max_compressed_len);
+  std::vector<uint8_t> decompressed(data.size());
+
+  // compress with c1
+  int64_t actual_size;
+  ASSERT_OK_AND_ASSIGN(actual_size,
+                       compressor->Compress(data.size(), data.data(), max_compressed_len,
+                                            compressed.data()));
+  compressed.resize(actual_size);
+
+  auto&& [corded, lifetime, sadness] =
+      MakeCordedBuffer(compressed.data(), compressed.size(), 42);
+
+  // decompress with c2
+  int64_t actual_decompressed_size;
+  ASSERT_OK_AND_ASSIGN(
+      actual_decompressed_size,
+      decompressor->DecompressCorded(compressed.size(), corded, decompressed.size(),
+                                     decompressed.data()));
+
+  ASSERT_EQ(data, decompressed);
+  ASSERT_EQ(data.size(), actual_decompressed_size);
+}
+
 // Check the streaming compressor against one-shot decompression
 
 void CheckStreamingCompressor(Codec* codec, const std::vector<uint8_t>& data) {
@@ -372,6 +401,34 @@ TEST_P(CodecTest, CodecRoundtrip) {
   }
 }
 
+TEST_P(CodecTest, CordedCodec) {
+  const auto compression = GetCompression();
+  if (compression == Compression::BZ2) {
+    GTEST_SKIP() << "BZ2 does not support one-shot compression";
+  }
+
+  int sizes[] = {0, 10000, 100000};
+  int slice_sizes[] = {10, 1000, 100000};
+
+  // create multiple compressors to try to break them
+  std::unique_ptr<Codec> compressor;
+  std::unique_ptr<CordedCodec> decompressor;
+  ASSERT_OK_AND_ASSIGN(compressor, Codec::Create(compression));
+  ASSERT_OK_AND_ASSIGN(decompressor, CordedCodec::Create(compression));
+
+  for (int data_size : sizes) {
+    std::vector<uint8_t> data = MakeRandomData(data_size);
+    for (int slice_size : slice_sizes) {
+      CheckCordedCodecRoundtrip(compressor, decompressor, data, slice_size);
+    }
+
+    data = MakeCompressibleData(data_size);
+    for (int slice_size : slice_sizes) {
+      CheckCordedCodecRoundtrip(compressor, decompressor, data, slice_size);
+    }
+  }
+}
+
 TEST(CodecTest, CodecRoundtripGzipMembers) {
 #ifndef ARROW_WITH_ZLIB
   GTEST_SKIP() << "Test requires Zlib compression";
@@ -446,6 +503,23 @@ TEST(TestCodecMisc, SpecifyCompressionLevel) {
     if (expect_success) {
       CheckCodecRoundtrip(*result1, *result2, data);
     }
+
+    // Corded codecs have the same sanity checks
+    auto result3 = CordedCodec::Create(compression, codec_options);
+    ASSERT_EQ(expect_success, result3.ok());
+    if (expect_success) {
+      const auto& plain = result1.ValueOrDie();
+      const auto& corded = result3.ValueOrDie();
+      ASSERT_EQ(plain->default_compression_level(), corded->default_compression_level());
+      ASSERT_EQ(plain->compression_level(), corded->compression_level());
+      ASSERT_EQ(plain->maximum_compression_level(), corded->maximum_compression_level());
+      ASSERT_EQ(plain->minimum_compression_level(), corded->minimum_compression_level());
+      ASSERT_EQ(plain->compression_type(), corded->compression_type());
+
+      for (int slice_size : {10, 5000}) {
+        CheckCordedCodecRoundtrip(*result1, *result3, data, slice_size);
+      }
+    }
   }
 }
 
@@ -462,8 +536,13 @@ void CheckSpecifyCodecOptions(Compression::type compression,
     auto result2 = Codec::Create(compression, codec_option);
     ASSERT_EQ(expect_success, result1.ok());
     ASSERT_EQ(expect_success, result2.ok());
+    auto result3 = CordedCodec::Create(compression, codec_option);
+    ASSERT_EQ(expect_success, result3.ok());
     if (expect_success) {
       CheckCodecRoundtrip(*result1, *result2, data);
+      for (int slice_size : {10, 5000}) {
+        CheckCordedCodecRoundtrip(*result1, *result3, data, slice_size);
+      }
     }
   }
 }
@@ -867,9 +946,12 @@ TEST(TestCodecLZ4Hadoop, Compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks
   ASSERT_OK_AND_ASSIGN(auto c1, Codec::Create(Compression::LZ4));
   ASSERT_OK_AND_ASSIGN(auto c2, Codec::Create(Compression::LZ4_HADOOP));
+  ASSERT_OK_AND_ASSIGN(auto c3, CordedCodec::Create(Compression::LZ4_HADOOP));
 
   std::vector<uint8_t> data = MakeRandomData(100);
   CheckCodecRoundtrip(c1, c2, data, /*check_reverse=*/false);
+  CheckCordedCodecRoundtrip(c1, c3, data, /* slice size */ 10);
+  CheckCordedCodecRoundtrip(c1, c3, data, /* slice size */ 1000);
 }
 #endif
 

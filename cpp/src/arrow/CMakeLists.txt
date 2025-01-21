@@ -504,6 +504,7 @@ set(ARROW_UTIL_SRCS
     util/byte_stream_split_internal.cc
     util/cancel.cc
     util/compression.cc
+    util/compression_corded.cc
     util/counting_semaphore.cc
     util/cpu_info.cc
     util/crc32.cc

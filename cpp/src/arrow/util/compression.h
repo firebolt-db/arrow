@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "arrow/corded_buffer.h"
 #include "arrow/result.h"
 #include "arrow/status.h"
 #include "arrow/util/type_fwd.h"
@@ -247,6 +248,45 @@ class ARROW_EXPORT Codec {
  private:
   /// \brief Initializes the codec's resources.
   virtual Status Init();
+};
+
+// Firebolt's CordedBuffer version of `Codec` that supports decompression only,
+// and decompresses from a CordedBuffer to a contiguous memory region
+class ARROW_EXPORT CordedCodec : public Codec {
+ public:
+  virtual Result<int64_t> DecompressCorded(int64_t input_len, CordedBuffer input,
+                                           int64_t output_buffer_len,
+                                           uint8_t* output_buffer) = 0;
+
+  Result<int64_t> Decompress(int64_t /*input_len*/, const uint8_t* /*input*/,
+                             int64_t /*output_buffer_len*/,
+                             uint8_t* /*output_buffer*/) final {
+    return Status::NotImplemented("CordedCodec::Decompress");
+  }
+
+  /// \brief Create a codec for the given compression algorithm with CodecOptions
+  static Result<std::unique_ptr<CordedCodec>> Create(
+      Compression::type codec, const CodecOptions& codec_options = CodecOptions{},
+      MemoryPool* pool = arrow::default_memory_pool());
+
+  /// \brief Create a codec for the given compression algorithm
+  static Result<std::unique_ptr<CordedCodec>> Create(Compression::type codec,
+                                                     int compression_level);
+
+  Result<int64_t> Compress(int64_t /*input_len*/, const uint8_t* /*input*/,
+                           int64_t /*output_buffer_len*/,
+                           uint8_t* /*output_buffer*/) final {
+    return Status::NotImplemented("CordedCodec::Compress");
+  }
+
+  Result<std::shared_ptr<Compressor>> MakeCompressor() final {
+    return Status::NotImplemented("Streaming compression unsupported for corded codecs");
+  }
+
+  Result<std::shared_ptr<Decompressor>> MakeDecompressor() final {
+    return Status::NotImplemented(
+        "Streaming decompression unsupported for corded codecs");
+  }
 };
 
 }  // namespace util

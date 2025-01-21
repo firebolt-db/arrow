@@ -46,6 +46,7 @@ class Future;
 namespace util {
 class Codec;
 class CodecOptions;
+class CordedCodec;
 class Float16;
 }  // namespace util
 
