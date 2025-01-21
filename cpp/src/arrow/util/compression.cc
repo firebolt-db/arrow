@@ -136,20 +136,26 @@ Result<int> Codec::DefaultCompressionLevel(Compression::type codec_type) {
   return codec->default_compression_level();
 }
 
+namespace {
+Status CodecNotAvailableError(Compression::type codec_type) {
+  if (codec_type == Compression::LZO) {
+    return Status::NotImplemented("LZO codec not implemented");
+  }
+
+  auto name = Codec::GetCodecAsString(codec_type);
+  if (name == "unknown") {
+    return Status::Invalid("Unrecognized codec");
+  }
+
+  return Status::NotImplemented("Support for codec '",
+                                Codec::GetCodecAsString(codec_type), "' not built");
+}
+}  // namespace
+
 Result<std::unique_ptr<Codec>> Codec::Create(Compression::type codec_type,
                                              const CodecOptions& codec_options) {
   if (!IsAvailable(codec_type)) {
-    if (codec_type == Compression::LZO) {
-      return Status::NotImplemented("LZO codec not implemented");
-    }
-
-    auto name = GetCodecAsString(codec_type);
-    if (name == "unknown") {
-      return Status::Invalid("Unrecognized codec");
-    }
-
-    return Status::NotImplemented("Support for codec '", GetCodecAsString(codec_type),
-                                  "' not built");
+    return CodecNotAvailableError(codec_type);
   }
 
   auto compression_level = codec_options.compression_level;
@@ -272,6 +278,51 @@ bool Codec::IsAvailable(Compression::type codec_type) {
     default:
       return false;
   }
+}
+
+Result<std::unique_ptr<CordedCodec>> CordedCodec::Create(
+    Compression::type codec_type, const CodecOptions& codec_options, MemoryPool* pool) {
+  if (!Codec::IsAvailable(codec_type)) {
+    return CodecNotAvailableError(codec_type);
+  }
+
+  auto compression_level = codec_options.compression_level;
+  if (compression_level != kUseDefaultCompressionLevel &&
+      !SupportsCompressionLevel(codec_type)) {
+    return Status::Invalid("Codec '", GetCodecAsString(codec_type),
+                           "' doesn't support setting a compression level.");
+  }
+
+  switch (codec_type) {
+    case Compression::UNCOMPRESSED:
+      return internal::MakeUncompressedCordedCodec();
+    case Compression::SNAPPY:
+#ifdef ARROW_WITH_SNAPPY
+      return internal::MakeSnappyCordedCodec();
+#endif
+      break;
+    case Compression::GZIP:
+    case Compression::BROTLI:
+    case Compression::ZSTD:
+    case Compression::LZ4:
+    case Compression::LZ4_FRAME:
+    case Compression::LZO:
+    case Compression::BZ2:
+    case Compression::LZ4_HADOOP: {
+      auto wrapped = Codec::Create(codec_type, codec_options);
+      ARROW_RETURN_NOT_OK(wrapped);
+      auto buffer = AllocateResizableBuffer(0, pool);
+      ARROW_RETURN_NOT_OK(buffer);
+      return internal::MakeCordedCodecWrapper(std::move(*wrapped), std::move(*buffer));
+    }
+  }
+  ARROW_DCHECK(false);
+  return nullptr;
+}
+
+Result<std::unique_ptr<CordedCodec>> CordedCodec::Create(Compression::type codec,
+                                                         int compression_level) {
+  return CordedCodec::Create(codec, CodecOptions{compression_level});
 }
 
 }  // namespace util

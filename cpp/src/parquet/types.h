@@ -505,6 +505,14 @@ std::unique_ptr<Codec> GetCodec(Compression::type codec,
 PARQUET_EXPORT
 std::unique_ptr<Codec> GetCodec(Compression::type codec, int compression_level);
 
+// Firebolt Corded codec versions
+PARQUET_EXPORT
+std::unique_ptr<CordedCodec> GetCordedCodec(Compression::type codec);
+
+PARQUET_EXPORT
+std::unique_ptr<CordedCodec> GetCordedCodec(Compression::type codec,
+                                            const CodecOptions& codec_options);
+
 struct ParquetCipher {
   enum type { AES_GCM_V1 = 0, AES_GCM_CTR_V1 = 1 };
 };

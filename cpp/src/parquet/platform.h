@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "arrow/buffer.h"         // IWYU pragma: export
+#include "arrow/corded_buffer.h"  // IWYU pragma: export
 #include "arrow/io/interfaces.h"  // IWYU pragma: export
 #include "arrow/status.h"         // IWYU pragma: export
 #include "arrow/type_fwd.h"       // IWYU pragma: export
@@ -89,6 +90,8 @@ using Buffer = ::arrow::Buffer;
 using Codec = ::arrow::util::Codec;
 using CodecOptions = ::arrow::util::CodecOptions;
 using Compression = ::arrow::Compression;
+using CordedBuffer = ::arrow::CordedBuffer;
+using CordedCodec = ::arrow::util::CordedCodec;
 using MemoryPool = ::arrow::MemoryPool;
 using MutableBuffer = ::arrow::MutableBuffer;
 using ResizableBuffer = ::arrow::ResizableBuffer;

@@ -232,4 +232,25 @@ std::vector<int64_t> GetSupportedHardwareFlags(
   return hardware_flags;
 }
 
+std::tuple<CordedBuffer, std::vector<std::vector<std::byte>>,
+           std::vector<std::span<const std::byte>>>
+MakeCordedBuffer(const uint8_t* data, int64_t size, int64_t slice_size) {
+  auto num_slices = (size + slice_size - 1) / slice_size;
+  std::vector<std::vector<std::byte>> storage(num_slices);
+  std::vector<std::span<const std::byte>> slices(num_slices);
+
+  int64_t pos = 0;
+  for (int64_t i = 0; i < num_slices; ++i) {
+    auto cur_slice_size = std::min(size - pos, slice_size);
+    assert(cur_slice_size > 0);
+    storage[i].resize(cur_slice_size);
+    memcpy(storage[i].data(), data + pos, cur_slice_size);
+    slices[i] = std::span{storage[i].data(), storage[i].size()};
+    pos += cur_slice_size;
+  }
+
+  CordedBuffer res{std::span{slices.data(), slices.size()}};
+  return {res, std::move(storage), std::move(slices)};
+}
+
 }  // namespace arrow

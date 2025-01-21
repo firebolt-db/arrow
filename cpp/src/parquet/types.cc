@@ -55,9 +55,8 @@ std::unique_ptr<Codec> GetCodec(Compression::type codec) {
   return GetCodec(codec, CodecOptions());
 }
 
-std::unique_ptr<Codec> GetCodec(Compression::type codec,
-                                const CodecOptions& codec_options) {
-  std::unique_ptr<Codec> result;
+namespace {
+void CheckCodecSupported(Compression::type codec) {
   if (codec == Compression::LZO) {
     throw ParquetException(
         "While LZO compression is supported by the Parquet format in "
@@ -70,14 +69,30 @@ std::unique_ptr<Codec> GetCodec(Compression::type codec,
        << " not supported in Parquet format";
     throw ParquetException(ss.str());
   }
+}
+}  // namespace
 
-  PARQUET_ASSIGN_OR_THROW(result, Codec::Create(codec, codec_options));
+std::unique_ptr<Codec> GetCodec(Compression::type codec,
+                                const CodecOptions& codec_options) {
+  CheckCodecSupported(codec);
+  PARQUET_ASSIGN_OR_THROW(auto result, Codec::Create(codec, codec_options));
   return result;
 }
 
 // use compression level to create Codec
 std::unique_ptr<Codec> GetCodec(Compression::type codec, int compression_level) {
   return GetCodec(codec, CodecOptions{compression_level});
+}
+
+std::unique_ptr<CordedCodec> GetCordedCodec(Compression::type codec,
+                                            const CodecOptions& codec_options) {
+  CheckCodecSupported(codec);
+  PARQUET_ASSIGN_OR_THROW(auto result, CordedCodec::Create(codec, codec_options));
+  return result;
+}
+
+std::unique_ptr<CordedCodec> GetCordedCodec(Compression::type codec) {
+  return GetCordedCodec(codec, CodecOptions());
 }
 
 bool PageCanUseChecksum(PageType::type pageType) {

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "arrow/buffer.h"
+#include "arrow/corded_buffer.h"
 #include "arrow/record_batch.h"
 #include "arrow/status.h"
 #include "arrow/testing/visibility.h"
@@ -140,5 +141,12 @@ const std::vector<std::shared_ptr<DataType>>& all_dictionary_index_types();
 ARROW_TESTING_EXPORT
 std::vector<int64_t> GetSupportedHardwareFlags(
     const std::vector<int64_t>& candidate_flags);
+
+// Convert `data` into a non-contiguous corded buffer.  Returns the corded buffer along
+// with two vectors: one that owns the actual underlying data, and one that owns the
+// slicing of the data. Both need to be kept alive while the corded buffer is used.
+std::tuple<CordedBuffer, std::vector<std::vector<std::byte>>,
+           std::vector<std::span<const std::byte>>>
+MakeCordedBuffer(const uint8_t* data, int64_t size, int64_t slice_size);
 
 }  // namespace arrow

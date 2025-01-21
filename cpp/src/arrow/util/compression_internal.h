@@ -76,6 +76,22 @@ constexpr int kZSTDDefaultCompressionLevel = 1;
 std::unique_ptr<Codec> MakeZSTDCodec(
     int compression_level = kZSTDDefaultCompressionLevel);
 
+
+/******************************************************************************/
+// Firebolt Corded Codecs (reading from corded buffer)
+
+// Snappy
+std::unique_ptr<CordedCodec> MakeSnappyCordedCodec();
+
+// Reading uncompressed files requires copying from the corded buffer to the contiguous
+// one, so this requires a codec for corded buffers
+std::unique_ptr<CordedCodec> MakeUncompressedCordedCodec();
+
+// Fallback: wrapper that copies from the corded buffer to a temporary contiguous buffer
+// and uses a regular, non-corded codec to decompress from the temporary to the output.
+std::unique_ptr<CordedCodec> MakeCordedCodecWrapper(
+    std::unique_ptr<Codec> wrapped_codec, std::unique_ptr<ResizableBuffer> buffer);
+
 }  // namespace internal
 }  // namespace util
 }  // namespace arrow
