@@ -203,7 +203,7 @@ class ARROW_EXPORT CordedBufferReader : public CordedInputStream {
   /// Instantiate from a CordedBuffer. Does not copy any data.
   explicit CordedBufferReader(CordedBuffer buffer, size_t size);
   bool closed() const override { return !is_open_; }
-  CordedBuffer buffer() const { return buffer_; }
+  const CordedBuffer& buffer() const { return buffer_; }
 
   // Corded version of Read(nbytes)
   Result<CordedBuffer> ReadCorded(int64_t nbytes) override;
