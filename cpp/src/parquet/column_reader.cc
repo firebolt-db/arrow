@@ -27,6 +27,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "arrow/array.h"
@@ -35,6 +36,9 @@
 #include "arrow/array/builder_dict.h"
 #include "arrow/array/builder_primitive.h"
 #include "arrow/chunked_array.h"
+#include "arrow/corded_buffer.h"
+#include "arrow/io/interfaces.h"
+#include "arrow/io/memory.h"
 #include "arrow/type.h"
 #include "arrow/util/bit_stream_utils_internal.h"
 #include "arrow/util/bit_util.h"
@@ -72,6 +76,8 @@ namespace bit_util = arrow::bit_util;
 namespace parquet {
 
 namespace {
+
+using PlainOrCordedBuffer = std::variant<std::shared_ptr<Buffer>, CordedBuffer>;
 
 // The minimum number of repetition/definition levels to decode at a time, for
 // better vectorized performance when doing many smaller record reads
@@ -237,7 +243,8 @@ class SerializedPageReader : public PageReader {
       InitDecryption();
     }
     max_page_header_size_ = kDefaultMaxPageHeaderSize;
-    decompressor_ = GetCodec(codec);
+    decompressor_ =
+        properties.firebolt_corded_buffers() ? GetCordedCodec(codec) : GetCodec(codec);
     always_compressed_ = always_compressed;
   }
 
@@ -256,7 +263,7 @@ class SerializedPageReader : public PageReader {
 
   void InitDecryption();
 
-  std::shared_ptr<Buffer> DecompressIfNeeded(std::shared_ptr<Buffer> page_buffer,
+  std::shared_ptr<Buffer> DecompressIfNeeded(PlainOrCordedBuffer page_buffer,
                                              int compressed_len, int uncompressed_len,
                                              int levels_byte_len = 0);
 
@@ -406,7 +413,21 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
     // We try to deserialize a larger buffer progressively
     // until a maximum allowed header limit
     while (true) {
-      PARQUET_ASSIGN_OR_THROW(auto view, stream_->Peek(allowed_page_size));
+      // If the header is not contiguous in a single slice, PeekBuffer needs to
+      // copy from multiple slices to this buffer for Thrift to read the header
+      std::shared_ptr<Buffer> corded_buffer_lifetime_sadness;
+      std::string_view view;
+      if (properties_.firebolt_corded_buffers()) {
+        auto* corded_reader =
+            dynamic_cast<::arrow::io::CordedBufferReader*>(stream_.get());
+        if (corded_reader == nullptr)
+          throw ParquetException("Expected CordedBufferReader");
+        corded_buffer_lifetime_sadness =
+            corded_reader->buffer().PeekBuffer(allowed_page_size);
+        view = corded_buffer_lifetime_sadness->operator std::string_view();
+      } else {
+        PARQUET_ASSIGN_OR_THROW(view, stream_->Peek(allowed_page_size));
+      }
       if (view.size() == 0) return nullptr;
 
       // This gets used, then set by DeserializeThriftMsg
@@ -454,12 +475,27 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
     }
 
     // Read the compressed data page.
-    PARQUET_ASSIGN_OR_THROW(auto page_buffer, stream_->Read(compressed_len));
-    if (page_buffer->size() != compressed_len) {
-      std::stringstream ss;
-      ss << "Page was smaller (" << page_buffer->size() << ") than expected ("
-         << compressed_len << ")";
-      ParquetException::EofException(ss.str());
+    PlainOrCordedBuffer page_buffer;
+    if (properties_.firebolt_corded_buffers()) {
+      auto corded_stream =
+          std::dynamic_pointer_cast<::arrow::io::CordedInputStream>(stream_);
+      PARQUET_ASSIGN_OR_THROW(page_buffer, corded_stream->ReadCorded(compressed_len));
+      int64_t page_buffer_size = std::get<CordedBuffer>(page_buffer).RemainingBytes();
+      // Corded buffers could have extra capacity, so allow
+      if (page_buffer_size < compressed_len) {
+        std::stringstream ss;
+        ss << "Page was smaller (" << page_buffer_size << ") than expected ("
+           << compressed_len << ")";
+        ParquetException::EofException(ss.str());
+      }
+    } else {
+      PARQUET_ASSIGN_OR_THROW(page_buffer, stream_->Read(compressed_len));
+      if (std::get<0>(page_buffer)->size() != compressed_len) {
+        std::stringstream ss;
+        ss << "Page was smaller (" << std::get<0>(page_buffer)->size()
+           << ") than expected (" << compressed_len << ")";
+        ParquetException::EofException(ss.str());
+      }
     }
 
     const PageType::type page_type = LoadEnumSafe(&current_page_header_.type);
@@ -467,8 +503,26 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
     if (properties_.page_checksum_verification() && current_page_header_.__isset.crc &&
         PageCanUseChecksum(page_type)) {
       // verify crc
-      uint32_t checksum =
-          ::arrow::internal::crc32(/* prev */ 0, page_buffer->data(), compressed_len);
+      uint32_t checksum = 0;
+      if (properties_.firebolt_corded_buffers()) {
+        auto corded_buffer = std::get<1>(page_buffer);
+        auto offset = corded_buffer.slice_offset();
+        auto remaining_len = compressed_len;
+        for (auto slice_idx = corded_buffer.slice_idx();
+             slice_idx < corded_buffer.num_slices(); ++slice_idx) {
+          const auto& slice = corded_buffer.slice(slice_idx);
+          auto len = std::min(static_cast<int32_t>(slice.size()) - offset, remaining_len);
+          auto* ptr = slice.data() + std::exchange(offset, 0);
+          checksum = ::arrow::internal::crc32(checksum, ptr, len);
+          remaining_len -= len;
+          if (remaining_len == 0) {
+            break;  // skip unused slices
+          }
+        }
+      } else {
+        checksum = ::arrow::internal::crc32(
+            /* prev */ 0, std::get<0>(page_buffer)->data(), compressed_len);
+      }
       if (static_cast<int32_t>(checksum) != current_page_header_.crc) {
         throw ParquetException(
             "could not verify page integrity, CRC checksum verification failed for "
@@ -479,10 +533,15 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
 
     // Decrypt it if we need to
     if (data_decryptor_ != nullptr) {
+      if (properties_.firebolt_corded_buffers()) {
+        throw ParquetException(
+            "Encrypted parquet files are not currently supported with corded buffers");
+      }
       auto decryption_buffer = AllocateBuffer(
           properties_.memory_pool(), data_decryptor_->PlaintextLength(compressed_len));
       compressed_len = data_decryptor_->Decrypt(
-          page_buffer->span_as<uint8_t>(), decryption_buffer->mutable_span_as<uint8_t>());
+          std::get<0>(page_buffer)->span_as<uint8_t>(),
+          decryption_buffer->mutable_span_as<uint8_t>());
 
       page_buffer = decryption_buffer;
     }
@@ -496,17 +555,20 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
       page_buffer =
           DecompressIfNeeded(std::move(page_buffer), compressed_len, uncompressed_len);
 
-      return std::make_shared<DictionaryPage>(page_buffer, dict_header.num_values,
-                                              LoadEnumSafe(&dict_header.encoding),
-                                              is_sorted);
+      // DecompressIfNeeded always returns a contiguous buffer, so now we can just do
+      // std::get<0>(page_buffer)
+      return std::make_shared<DictionaryPage>(
+          std::get<0>(page_buffer), dict_header.num_values,
+          LoadEnumSafe(&dict_header.encoding), is_sorted);
     } else if (page_type == PageType::DATA_PAGE) {
       ++page_ordinal_;
       const format::DataPageHeader& header = current_page_header_.data_page_header;
       page_buffer =
           DecompressIfNeeded(std::move(page_buffer), compressed_len, uncompressed_len);
 
+      // DecompressIfNeeded always returns a contiguous buffer
       return std::make_shared<DataPageV1>(
-          page_buffer, header.num_values, LoadEnumSafe(&header.encoding),
+          std::get<0>(page_buffer), header.num_values, LoadEnumSafe(&header.encoding),
           LoadEnumSafe(&header.definition_level_encoding),
           LoadEnumSafe(&header.repetition_level_encoding), uncompressed_len,
           std::move(data_page_statistics));
@@ -526,14 +588,15 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
         throw ParquetException("Levels size too large (corrupt file?)");
       }
       // DecompressIfNeeded doesn't take `is_compressed` into account as
-      // it's page type-agnostic.
-      if (is_compressed) {
+      // it's page type-agnostic.  Corded buffers always need to be decompressed.
+      if (is_compressed || properties_.firebolt_corded_buffers()) {
         page_buffer = DecompressIfNeeded(std::move(page_buffer), compressed_len,
                                          uncompressed_len, levels_byte_len);
       }
+      ARROW_DCHECK(std::holds_alternative<std::shared_ptr<Buffer>>(page_buffer));
 
       return std::make_shared<DataPageV2>(
-          page_buffer, header.num_values, header.num_nulls, header.num_rows,
+          std::get<0>(page_buffer), header.num_values, header.num_nulls, header.num_rows,
           LoadEnumSafe(&header.encoding), header.definition_levels_byte_length,
           header.repetition_levels_byte_length, uncompressed_len, is_compressed,
           std::move(data_page_statistics));
@@ -546,10 +609,28 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
 }
 
 std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
-    std::shared_ptr<Buffer> page_buffer, int compressed_len, int uncompressed_len,
+    PlainOrCordedBuffer page_buffer, int compressed_len, int uncompressed_len,
     int levels_byte_len) {
+  // Sanity check: correct buffer type passed
+  std::shared_ptr<Buffer> plain_buffer;
+  std::optional<CordedBuffer> corded_buffer;
+  if (properties_.firebolt_corded_buffers()) {
+    if (!std::holds_alternative<CordedBuffer>(page_buffer)) {
+      throw ParquetException("Firebolt corded buffers enabled but not used");
+    };
+    corded_buffer.emplace(std::get<CordedBuffer>(page_buffer));
+  } else {
+    if (!std::holds_alternative<std::shared_ptr<Buffer>>(page_buffer)) {
+      throw ParquetException("Expected plain buffer, but got corded buffer");
+    }
+    plain_buffer = std::get<std::shared_ptr<Buffer>>(page_buffer);
+  }
+
   if (decompressor_ == nullptr) {
-    return page_buffer;
+    if (properties_.firebolt_corded_buffers()) {
+      throw ParquetException("No decompressor");
+    }
+    return std::get<0>(page_buffer);
   }
   if (compressed_len < levels_byte_len || uncompressed_len < levels_byte_len) {
     throw ParquetException("Invalid page header");
@@ -562,7 +643,16 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
   if (levels_byte_len > 0) {
     // First copy the levels as-is
     uint8_t* decompressed = decompression_buffer_->mutable_data();
-    memcpy(decompressed, page_buffer->data(), levels_byte_len);
+    if (properties_.firebolt_corded_buffers()) {
+      auto copied_bytes =
+          ::arrow::util::MemcpyFromCorded(decompressed, *corded_buffer, levels_byte_len);
+      if (copied_bytes != levels_byte_len) {
+        throw ParquetException("Invalid page: premature end of levels");
+      }
+      corded_buffer->Advance(levels_byte_len);
+    } else {
+      memcpy(decompressed, std::get<0>(page_buffer)->data(), levels_byte_len);
+    }
   }
 
   // GH-31992: DataPageV2 may store only levels and no values when all
@@ -572,14 +662,23 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
   int64_t decompressed_len = 0;
   if (uncompressed_len - levels_byte_len != 0) {
     // Decompress the values
-    PARQUET_ASSIGN_OR_THROW(
-        decompressed_len,
-        decompressor_->Decompress(
-            compressed_len - levels_byte_len, page_buffer->data() + levels_byte_len,
-            uncompressed_len - levels_byte_len,
-            decompression_buffer_->mutable_data() + levels_byte_len));
+    if (properties_.firebolt_corded_buffers()) {
+      PARQUET_ASSIGN_OR_THROW(
+          decompressed_len,
+          dynamic_cast<CordedCodec*>(decompressor_.get())
+              ->DecompressCorded(
+                  compressed_len - levels_byte_len, *corded_buffer,
+                  uncompressed_len - levels_byte_len,
+                  decompression_buffer_->mutable_data() + levels_byte_len));
+    } else {
+      PARQUET_ASSIGN_OR_THROW(
+          decompressed_len, decompressor_->Decompress(
+                                compressed_len - levels_byte_len,
+                                std::get<0>(page_buffer)->data() + levels_byte_len,
+                                uncompressed_len - levels_byte_len,
+                                decompression_buffer_->mutable_data() + levels_byte_len));
+    }
   }
-
   if (decompressed_len != uncompressed_len - levels_byte_len) {
     throw ParquetException("Page didn't decompress to expected size, expected: " +
                            std::to_string(uncompressed_len - levels_byte_len) +

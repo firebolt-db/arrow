@@ -109,7 +109,8 @@ class PARQUET_EXPORT ParquetFileReader {
     static std::unique_ptr<Contents> Open(
         std::shared_ptr<::arrow::io::RandomAccessFile> source,
         const ReaderProperties& props = default_reader_properties(),
-        std::shared_ptr<FileMetaData> metadata = NULLPTR);
+        std::shared_ptr<FileMetaData> metadata = NULLPTR,
+        std::optional<int64_t> footer_read_size_hint = {});
 
     static ::arrow::Future<std::unique_ptr<Contents>> OpenAsync(
         std::shared_ptr<::arrow::io::RandomAccessFile> source,
@@ -129,11 +130,20 @@ class PARQUET_EXPORT ParquetFileReader {
   ~ParquetFileReader();
 
   // Create a file reader instance from an Arrow file object. Thread-safety is
-  // the responsibility of the file implementation
+  // the responsibility of the file implementation.
+  //
+  // If present, `footer_read_size_hint` should contain the size of the footer
+  // and any trailing data in bytes -- essentially an offset from the end of the
+  // file on where to find the start of the footer.  When *not* Firebolt's
+  // corded buffers, incorrect hints do not cause errors, but may harm
+  // performance.  When using corded buffers, too small hints are also ok but
+  // may harm performance, while the `source` is allowed return errors for reads
+  // that include both the footer and non-footer memory (too large hints).
   static std::unique_ptr<ParquetFileReader> Open(
       std::shared_ptr<::arrow::io::RandomAccessFile> source,
       const ReaderProperties& props = default_reader_properties(),
-      std::shared_ptr<FileMetaData> metadata = NULLPTR);
+      std::shared_ptr<FileMetaData> metadata = NULLPTR,
+      std::optional<int64_t> footer_read_size_hint = {});
 
   // API Convenience to open a serialized Parquet file on disk, using Arrow IO
   // interfaces.

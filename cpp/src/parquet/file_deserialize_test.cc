@@ -23,6 +23,8 @@
 #include <memory>
 #include <optional>
 
+#include "arrow/corded_buffer.h"
+#include "arrow/testing/util.h"
 #include "parquet/column_page.h"
 #include "parquet/column_reader.h"
 #include "parquet/exception.h"
@@ -108,7 +110,8 @@ static std::vector<Compression::type> GetSupportedCodecTypes() {
   return codec_types;
 }
 
-class TestPageSerde : public ::testing::Test {
+// Param is the slice size for Firebolt's corded buffers, 0 = disabled
+class TestPageSerde : public ::testing::TestWithParam<int64_t> {
  public:
   void SetUp() {
     data_page_header_.encoding = format::Encoding::PLAIN;
@@ -120,11 +123,25 @@ class TestPageSerde : public ::testing::Test {
 
   void InitSerializedPageReader(int64_t num_rows,
                                 Compression::type codec = Compression::UNCOMPRESSED,
-                                const ReaderProperties& properties = ReaderProperties()) {
+                                ReaderProperties properties = ReaderProperties()) {
     EndStream();
 
-    auto stream = std::make_shared<::arrow::io::BufferReader>(out_buffer_);
-    page_reader_ = PageReader::Open(stream, num_rows, codec, properties);
+    auto slice_size = GetParam();
+    if (slice_size > 0) {
+      auto [buffer, data, slices] =
+          ::arrow::MakeCordedBuffer(out_buffer_->data(), out_buffer_->size(), slice_size);
+      corded_data_.emplace(std::move(data));
+      corded_slices_.emplace(std::move(slices));
+
+      auto stream =
+          std::make_shared<::arrow::io::CordedBufferReader>(buffer, out_buffer_->size());
+
+      properties.use_firebolt_corded_buffers();
+      page_reader_ = PageReader::Open(stream, num_rows, codec, properties);
+    } else {
+      auto stream = std::make_shared<::arrow::io::BufferReader>(out_buffer_);
+      page_reader_ = PageReader::Open(stream, num_rows, codec, properties);
+    }
   }
 
   void WriteDataPageHeader(int max_serialized_len = 1024, int32_t uncompressed_size = 0,
@@ -203,6 +220,9 @@ class TestPageSerde : public ::testing::Test {
  protected:
   std::shared_ptr<::arrow::io::BufferOutputStream> out_stream_;
   std::shared_ptr<Buffer> out_buffer_;
+
+  std::optional<std::vector<std::vector<std::byte>>> corded_data_;
+  std::optional<std::vector<std::span<const std::byte>>> corded_slices_;
 
   std::unique_ptr<PageReader> page_reader_;
   format::PageHeader page_header_;
@@ -340,7 +360,7 @@ void CheckDataPageHeader(const format::DataPageHeaderV2& expected, const Page* p
   CheckStatistics(expected, data_page->statistics());
 }
 
-TEST_F(TestPageSerde, DataPageV1) {
+TEST_P(TestPageSerde, DataPageV1) {
   int stats_size = 512;
   const int32_t num_rows = 4444;
   AddDummyStats(stats_size, data_page_header_, /* fill_all_stats = */ true);
@@ -586,7 +606,7 @@ TYPED_TEST(PageFilterTest, TestChangingPageFilter) {
 }
 
 // Test that we do not skip dictionary pages.
-TEST_F(TestPageSerde, DoesNotFilterDictionaryPages) {
+TEST_P(TestPageSerde, DoesNotFilterDictionaryPages) {
   int data_size = 1024;
   std::vector<uint8_t> faux_data(data_size);
 
@@ -618,7 +638,7 @@ TEST_F(TestPageSerde, DoesNotFilterDictionaryPages) {
 }
 
 // Tests that we successfully skip non-data pages.
-TEST_F(TestPageSerde, SkipsNonDataPages) {
+TEST_P(TestPageSerde, SkipsNonDataPages) {
   int data_size = 1024;
   std::vector<uint8_t> faux_data(data_size);
   ASSERT_NO_FATAL_FAILURE(WriteIndexPageHeader(data_size, data_size));
@@ -651,7 +671,7 @@ TEST_F(TestPageSerde, SkipsNonDataPages) {
   ASSERT_EQ(page_reader_->NextPage(), nullptr);
 }
 
-TEST_F(TestPageSerde, DataPageV2) {
+TEST_P(TestPageSerde, DataPageV2) {
   int stats_size = 512;
   const int32_t num_rows = 4444;
   AddDummyStats(stats_size, data_page_header_v2_, /* fill_all_stats = */ true);
@@ -663,7 +683,7 @@ TEST_F(TestPageSerde, DataPageV2) {
   ASSERT_NO_FATAL_FAILURE(CheckDataPageHeader(data_page_header_v2_, current_page.get()));
 }
 
-TEST_F(TestPageSerde, TestLargePageHeaders) {
+TEST_P(TestPageSerde, TestLargePageHeaders) {
   int stats_size = 256 * 1024;  // 256 KB
   AddDummyStats(stats_size, data_page_header_);
 
@@ -686,7 +706,7 @@ TEST_F(TestPageSerde, TestLargePageHeaders) {
   ASSERT_NO_FATAL_FAILURE(CheckDataPageHeader(data_page_header_, current_page.get()));
 }
 
-TEST_F(TestPageSerde, TestFailLargePageHeaders) {
+TEST_P(TestPageSerde, TestFailLargePageHeaders) {
   const int32_t num_rows = 1337;  // dummy value
 
   int stats_size = 256 * 1024;  // 256 KB
@@ -756,7 +776,7 @@ void TestPageSerde::TestPageCompressionRoundTrip(const std::vector<int>& page_si
   }
 }
 
-TEST_F(TestPageSerde, Compression) {
+TEST_P(TestPageSerde, Compression) {
   std::vector<int> page_sizes;
   page_sizes.reserve(10);
   for (int i = 0; i < 10; ++i) {
@@ -766,7 +786,7 @@ TEST_F(TestPageSerde, Compression) {
   this->TestPageCompressionRoundTrip(page_sizes);
 }
 
-TEST_F(TestPageSerde, PageSizeResetWhenRead) {
+TEST_P(TestPageSerde, PageSizeResetWhenRead) {
   // GH-35423: Parquet SerializedPageReader need to
   // reset the size after getting a smaller page.
   std::vector<int> page_sizes;
@@ -778,7 +798,7 @@ TEST_F(TestPageSerde, PageSizeResetWhenRead) {
   this->TestPageCompressionRoundTrip(page_sizes);
 }
 
-TEST_F(TestPageSerde, LZONotSupported) {
+TEST_P(TestPageSerde, LZONotSupported) {
   // Must await PARQUET-530
   int data_size = 1024;
   std::vector<uint8_t> faux_data(data_size);
@@ -787,7 +807,7 @@ TEST_F(TestPageSerde, LZONotSupported) {
   ASSERT_THROW(InitSerializedPageReader(data_size, Compression::LZO), ParquetException);
 }
 
-TEST_F(TestPageSerde, NoCrc) {
+TEST_P(TestPageSerde, NoCrc) {
   int stats_size = 512;
   const int32_t num_rows = 4444;
   AddDummyStats(stats_size, data_page_header_, /*fill_all_stats=*/true);
@@ -801,7 +821,7 @@ TEST_F(TestPageSerde, NoCrc) {
   ASSERT_NO_FATAL_FAILURE(CheckDataPageHeader(data_page_header_, current_page.get()));
 }
 
-TEST_F(TestPageSerde, NoCrcDict) {
+TEST_P(TestPageSerde, NoCrcDict) {
   const int32_t num_rows = 4444;
   dictionary_page_header_.num_values = num_rows;
 
@@ -817,71 +837,71 @@ TEST_F(TestPageSerde, NoCrcDict) {
   EXPECT_EQ(num_rows, dict_page->num_values());
 }
 
-TEST_F(TestPageSerde, CrcCheckSuccessful) {
+TEST_P(TestPageSerde, CrcCheckSuccessful) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ false,
                          /* verification_checksum */ true);
 }
 
-TEST_F(TestPageSerde, CrcCheckFail) {
+TEST_P(TestPageSerde, CrcCheckFail) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ true,
                          /* verification_checksum */ true);
 }
 
-TEST_F(TestPageSerde, CrcCorruptNotChecked) {
+TEST_P(TestPageSerde, CrcCorruptNotChecked) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ true,
                          /* verification_checksum */ false);
 }
 
-TEST_F(TestPageSerde, CrcCheckNonExistent) {
+TEST_P(TestPageSerde, CrcCheckNonExistent) {
   this->TestPageSerdeCrc(/* write_checksum */ false, /* write_page_corrupt */ false,
                          /* verification_checksum */ true);
 }
 
-TEST_F(TestPageSerde, DictCrcCheckSuccessful) {
+TEST_P(TestPageSerde, DictCrcCheckSuccessful) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ false,
                          /* verification_checksum */ true, /* has_dictionary */ true);
 }
 
-TEST_F(TestPageSerde, DictCrcCheckFail) {
+TEST_P(TestPageSerde, DictCrcCheckFail) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ true,
                          /* verification_checksum */ true, /* has_dictionary */ true);
 }
 
-TEST_F(TestPageSerde, DictCrcCorruptNotChecked) {
+TEST_P(TestPageSerde, DictCrcCorruptNotChecked) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ true,
                          /* verification_checksum */ false, /* has_dictionary */ true);
 }
 
-TEST_F(TestPageSerde, DictCrcCheckNonExistent) {
+TEST_P(TestPageSerde, DictCrcCheckNonExistent) {
   this->TestPageSerdeCrc(/* write_checksum */ false, /* write_page_corrupt */ false,
                          /* verification_checksum */ true, /* has_dictionary */ true);
 }
 
-TEST_F(TestPageSerde, DataPageV2CrcCheckSuccessful) {
+TEST_P(TestPageSerde, DataPageV2CrcCheckSuccessful) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ false,
                          /* verification_checksum */ true, /* has_dictionary */ false,
                          /* write_data_page_v2 */ true);
 }
 
-TEST_F(TestPageSerde, DataPageV2CrcCheckFail) {
+TEST_P(TestPageSerde, DataPageV2CrcCheckFail) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ true,
                          /* verification_checksum */ true, /* has_dictionary */ false,
                          /* write_data_page_v2 */ true);
 }
 
-TEST_F(TestPageSerde, DataPageV2CrcCorruptNotChecked) {
+TEST_P(TestPageSerde, DataPageV2CrcCorruptNotChecked) {
   this->TestPageSerdeCrc(/* write_checksum */ true, /* write_page_corrupt */ true,
                          /* verification_checksum */ false, /* has_dictionary */ false,
                          /* write_data_page_v2 */ true);
 }
 
-TEST_F(TestPageSerde, DataPageV2CrcCheckNonExistent) {
+TEST_P(TestPageSerde, DataPageV2CrcCheckNonExistent) {
   this->TestPageSerdeCrc(/* write_checksum */ false, /* write_page_corrupt */ false,
                          /* verification_checksum */ true, /* has_dictionary */ false,
                          /* write_data_page_v2 */ true);
 }
 
-TEST_F(TestPageSerde, BadCompressedPageSize) {
+TEST_P(TestPageSerde, BadCompressedPageSize) {
   // GH-38326: an exception should be raised if a compressed data page
   // decompresses to a smaller size than declared in the data page header.
   auto codec_types = GetSupportedCodecTypes();
@@ -922,6 +942,11 @@ TEST_F(TestPageSerde, BadCompressedPageSize) {
     ResetStream();
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(PageReader, TestPageSerde,
+                         ::testing::ValuesIn(std::initializer_list<int64_t>{
+                             0,  // non-corded
+                             10, 42, 100, 10000}));
 
 // ----------------------------------------------------------------------
 // File structure tests

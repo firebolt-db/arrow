@@ -245,10 +245,25 @@ class SerializedRowGroup : public RowGroupReader::Contents {
     std::shared_ptr<ArrowInputStream> stream;
     if (cached_source_ && prebuffered_column_chunks_bitmap_ != nullptr &&
         ::arrow::bit_util::GetBit(prebuffered_column_chunks_bitmap_->data(), i)) {
+      if (properties_.firebolt_corded_buffers()) {
+        throw ParquetException("Cannot use prebuffered columns with corded buffers");
+      }
       // PARQUET-1698: if read coalescing is enabled, read from pre-buffered
       // segments.
       PARQUET_ASSIGN_OR_THROW(auto buffer, cached_source_->Read(col_range));
       stream = std::make_shared<::arrow::io::BufferReader>(buffer);
+    } else if (properties_.firebolt_corded_buffers()) {
+      auto corded_file =
+          std::dynamic_pointer_cast<::arrow::io::CordedRandomAccessFile>(source_);
+      if (corded_file == nullptr) {
+        throw ParquetException(
+            "Expected a CordedRandomAccessFile when configured to use corded buffers");
+      }
+      // TODO(knight-bus): this reads the entire ColumnChunk. Down the line, we might want
+      // to change that to per-page reading.
+      PARQUET_ASSIGN_OR_THROW(
+          auto data, corded_file->ReadCordedAt(col_range.offset, col_range.length));
+      stream = std::make_shared<::arrow::io::CordedBufferReader>(data, col_range.length);
     } else {
       stream = properties_.GetStream(source_, col_range.offset, col_range.length);
     }
@@ -264,6 +279,11 @@ class SerializedRowGroup : public RowGroupReader::Contents {
     if (!crypto_metadata) {
       return PageReader::Open(stream, col->num_values(), col->compression(), properties_,
                               always_compressed);
+    }
+
+    if (properties_.firebolt_corded_buffers()) {
+      throw ParquetException(
+          "Encrypted Parquet files are not currently supported on top of corded buffers");
     }
 
     // The column is encrypted
@@ -435,8 +455,12 @@ class SerializedFile : public ParquetFileReader::Contents {
   // Metadata/footer parsing. Divided up to separate sync/async paths, and to use
   // exceptions for error handling (with the async path converting to Future/Status).
 
-  void ParseMetaData() {
-    int64_t footer_read_size = GetFooterReadSize();
+  void ParseMetaData(std::optional<int64_t> footer_read_size_hint) {
+    int64_t footer_read_size =
+        footer_read_size_hint.has_value()
+            // Prevent out of bounds reads for bad hints
+            ? std::min(std::max<int64_t>(0, *footer_read_size_hint), source_size_)
+            : GetFooterReadSize();
     PARQUET_ASSIGN_OR_THROW(
         auto footer_buffer,
         source_->ReadAt(source_size_ - footer_read_size, footer_read_size));
@@ -773,7 +797,8 @@ ParquetFileReader::~ParquetFileReader() {
 // the file
 std::unique_ptr<ParquetFileReader::Contents> ParquetFileReader::Contents::Open(
     std::shared_ptr<ArrowInputFile> source, const ReaderProperties& props,
-    std::shared_ptr<FileMetaData> metadata) {
+    std::shared_ptr<FileMetaData> metadata,
+    std::optional<int64_t> footer_read_size_hint) {
   std::unique_ptr<ParquetFileReader::Contents> result(
       new SerializedFile(std::move(source), props));
 
@@ -782,7 +807,7 @@ std::unique_ptr<ParquetFileReader::Contents> ParquetFileReader::Contents::Open(
 
   if (metadata == nullptr) {
     // Validates magic bytes, parses metadata, and initializes the SchemaDescriptor
-    file->ParseMetaData();
+    file->ParseMetaData(footer_read_size_hint);
   } else {
     file->set_metadata(std::move(metadata));
   }
@@ -819,8 +844,10 @@ ParquetFileReader::Contents::OpenAsync(std::shared_ptr<ArrowInputFile> source,
 
 std::unique_ptr<ParquetFileReader> ParquetFileReader::Open(
     std::shared_ptr<::arrow::io::RandomAccessFile> source, const ReaderProperties& props,
-    std::shared_ptr<FileMetaData> metadata) {
-  auto contents = SerializedFile::Open(std::move(source), props, std::move(metadata));
+    std::shared_ptr<FileMetaData> metadata,
+    std::optional<int64_t> footer_read_size_hint) {
+  auto contents = SerializedFile::Open(std::move(source), props, std::move(metadata),
+                                       footer_read_size_hint);
   std::unique_ptr<ParquetFileReader> result = std::make_unique<ParquetFileReader>();
   result->Open(std::move(contents));
   return result;
