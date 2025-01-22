@@ -654,7 +654,7 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
     if (properties_.firebolt_corded_buffers()) {
       throw ParquetException("No decompressor");
     }
-    return std::get<0>(page_buffer);
+    return plain_buffer;
   }
   if (compressed_len < levels_byte_len || uncompressed_len < levels_byte_len) {
     throw ParquetException("Invalid page header");
@@ -687,13 +687,14 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
   if (uncompressed_len - levels_byte_len != 0) {
     // Decompress the values
     if (properties_.firebolt_corded_buffers()) {
+      auto* corded_decompressor = dynamic_cast<CordedCodec*>(decompressor_.get());
+      if (corded_decompressor == nullptr)
+        throw ParquetException("Firebolt corded buffers enabled, expected corded codec");
       PARQUET_ASSIGN_OR_THROW(
-          decompressed_len,
-          dynamic_cast<CordedCodec*>(decompressor_.get())
-              ->DecompressCorded(
-                  compressed_len - levels_byte_len, *corded_buffer,
-                  uncompressed_len - levels_byte_len,
-                  decompression_buffer_->mutable_data() + levels_byte_len));
+          decompressed_len, corded_decompressor->DecompressCorded(
+                                compressed_len - levels_byte_len, *corded_buffer,
+                                uncompressed_len - levels_byte_len,
+                                decompression_buffer_->mutable_data() + levels_byte_len));
     } else {
       PARQUET_ASSIGN_OR_THROW(
           decompressed_len, decompressor_->Decompress(
