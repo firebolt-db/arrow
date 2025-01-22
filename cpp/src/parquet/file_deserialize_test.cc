@@ -944,9 +944,10 @@ TEST_P(TestPageSerde, BadCompressedPageSize) {
 }
 
 INSTANTIATE_TEST_SUITE_P(PageReader, TestPageSerde,
-                         ::testing::ValuesIn(std::initializer_list<int64_t>{
-                             0,  // non-corded
-                             10, 42, 100, 10000}));
+                         ::testing::Values(      //
+                             0,                  // disable corded buffers
+                             10, 42, 100, 10000  // various slice sizes
+                             ));
 
 // ----------------------------------------------------------------------
 // File structure tests

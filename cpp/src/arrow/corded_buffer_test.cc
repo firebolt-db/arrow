@@ -91,7 +91,15 @@ TEST(CordedBuffer, Simple) {
   buffer.Advance(buffer.RemainingBytes());
   EXPECT_EQ(buffer.num_slices(), buffer.slice_idx());
   EXPECT_EQ(0, buffer.slice_offset());
+  EXPECT_TRUE(buffer.Exhausted());
   EXPECT_EQ(buffer.Peek(10), std::span<const std::byte>{});
+
+  // Out-of-bounds slice accesses
+  EXPECT_EQ(buffer.slice(-1), std::span<const std::byte>{});
+  EXPECT_EQ(buffer.slice(buffer.num_slices()), std::span<const std::byte>{});
+  // Within-bounds slice access
+  EXPECT_EQ(buffer.slice(42).size(), 1024);
+  EXPECT_EQ(buffer.slice(42).data(), bytes.data() + 4200);
 }
 
 TEST(CordedBuffer, Memcpy) {
@@ -141,6 +149,13 @@ TEST(CordedBuffer, Memcpy) {
   // Also here: 0 and negative nbytes are safe
   EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, 0));
   EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, -10));
+
+  // Advance to end and then try again
+  buffer.Advance(buffer.RemainingBytes());
+  EXPECT_TRUE(buffer.Exhausted());
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, 0));
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, -10));
+  EXPECT_EQ(0, util::MemcpyFromCorded(nullptr, buffer, 10));
 }
 
 }  // namespace arrow::internal

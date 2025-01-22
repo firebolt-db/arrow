@@ -19,14 +19,13 @@ class CordedBuffer {
       : slices_(slices), slice_idx_(slice_idx), slice_offset_(slice_offset) {}
 
   /// How many bytes remain in the current slice
-  int64_t RemainingBytesInCurrentSlice() const {
-    if (slices_.empty()) return 0;
-    if (slice_idx_ >= static_cast<int32_t>(slices_.size())) return 0;
+  int64_t RemainingBytesInCurrentSlice() const noexcept {
+    if (Exhausted()) return 0;
     return static_cast<int64_t>(slices_[slice_idx_].size()) - slice_offset_;
   }
 
   /// How many bytes remain in the corded buffer
-  int64_t RemainingBytes() const {
+  int64_t RemainingBytes() const noexcept {
     int64_t res = RemainingBytesInCurrentSlice();
     for (size_t idx = slice_idx_ + 1; idx < slices_.size(); ++idx) {
       res += slices_[idx].size();
@@ -36,52 +35,32 @@ class CordedBuffer {
 
   /// Zero-copy peek into *the current slice* only without advancing the position.  Will
   /// return at most `RemainingBytesInCurrentSlice` bytes.
-  std::span<const std::byte> Peek(int64_t nbytes) const {
-    if (slices_.empty() || slice_idx_ >= num_slices()) return {};
+  std::span<const std::byte> Peek(int64_t nbytes) const noexcept {
+    if (Exhausted()) return {};
     return {slices_[slice_idx_].data() + slice_offset_,
             static_cast<size_t>(std::min(nbytes, RemainingBytesInCurrentSlice()))};
   }
 
   /// Peek into the corded buffer without advancing the position.  Zero-copy if the entire
   /// read range is contained in a single slice, copying if it does not.
-  std::shared_ptr<Buffer> PeekBuffer(int64_t nbytes) const;
+  std::shared_ptr<Buffer> PeekBuffer(int64_t nbytes) const noexcept;
 
   /// Advance the current position by `n` bytes.
-  void Advance(size_t n) {
-    size_t skipped = 0;
-    for (; slice_idx_ < static_cast<int32_t>(slices_.size()); ++slice_idx_) {
-      const auto& slice = slices_[slice_idx_];
-      const size_t remaining_to_skip = n - skipped;
-      const size_t this_slice_offset = std::exchange(slice_offset_, 0);
-      const size_t available_in_slice = slice.size() - this_slice_offset;
-      if (remaining_to_skip == available_in_slice) {
-        // We advanced just to the page boundary, need to advance to the next page
-        ++slice_idx_;
-        return;
-      }
-      if (remaining_to_skip < available_in_slice) {
-        slice_offset_ = static_cast<int32_t>(remaining_to_skip + this_slice_offset);
-        return;
-      }
-      skipped += available_in_slice;
-    }
-  }
+  void Advance(size_t n) noexcept;
 
   /// Whether the position is at the end of the buffer
-  bool Exhausted() const {
-    return slices_.empty() ||
-           (slice_idx_ == static_cast<int32_t>(slices_.size()) &&
-            slice_offset_ == static_cast<int32_t>(slices_.back().size()));
+  bool Exhausted() const noexcept {
+    return slices_.empty() || slice_idx_ >= static_cast<int32_t>(slices_.size());
   }
 
-  int32_t num_slices() const { return slices_.size(); }
+  int32_t num_slices() const noexcept { return static_cast<int32_t>(slices_.size()); }
 
-  /// Raw access to a particular slice.
-  Slice slice(int32_t slice_idx) const;
+  /// Raw access to a particular slice.  Returns an empty slice for out-of-bounds accesses.
+  const Slice& slice(int32_t slice_idx) const noexcept;
 
-  int32_t slice_idx() const { return slice_idx_; }
+  int32_t slice_idx() const noexcept { return slice_idx_; }
 
-  int32_t slice_offset() const { return slice_offset_; }
+  int32_t slice_offset() const noexcept { return slice_offset_; }
 
  private:
   // The slices
