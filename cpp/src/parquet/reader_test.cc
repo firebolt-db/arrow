@@ -25,6 +25,7 @@
 #include <utility>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 
 #include "arrow/json/rapidjson_defs.h"  // IWYU pragma: keep
@@ -36,6 +37,7 @@
 #include "arrow/array.h"
 #include "arrow/buffer.h"
 #include "arrow/io/file.h"
+#include "arrow/io/interfaces.h"
 #include "arrow/testing/future_util.h"
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/random.h"
@@ -45,13 +47,17 @@
 
 #include "parquet/column_reader.h"
 #include "parquet/column_scanner.h"
+#include "parquet/exception.h"
 #include "parquet/file_reader.h"
 #include "parquet/file_writer.h"
 #include "parquet/metadata.h"
 #include "parquet/page_index.h"
 #include "parquet/platform.h"
 #include "parquet/printer.h"
+#include "parquet/properties.h"
+#include "parquet/test_corded_file.h"
 #include "parquet/test_util.h"
+#include "parquet/types.h"
 
 namespace rj = arrow::rapidjson;
 
@@ -247,10 +253,10 @@ void CheckRowGroupMetadata(const RowGroupMetaData* rg_metadata,
   }
 }
 
-class TestBooleanRLE : public ::testing::Test {
+class TestBooleanRLE : public ::testing::TestWithParam<int64_t /* slice_size */> {
  public:
   void SetUp() {
-    reader_ = ParquetFileReader::OpenFile(data_file("rle_boolean_encoding.parquet"));
+    reader_ = OpenFileReader(data_file("rle_boolean_encoding.parquet"), GetParam());
   }
 
   void TearDown() {}
@@ -259,7 +265,7 @@ class TestBooleanRLE : public ::testing::Test {
   std::unique_ptr<ParquetFileReader> reader_;
 };
 
-TEST_F(TestBooleanRLE, TestBooleanScanner) {
+TEST_P(TestBooleanRLE, TestBooleanScanner) {
 #ifndef ARROW_WITH_ZLIB
   GTEST_SKIP() << "Test requires Zlib compression";
 #endif
@@ -309,7 +315,7 @@ TEST_F(TestBooleanRLE, TestBooleanScanner) {
   ASSERT_FALSE(scanner->NextValue(&val, &is_null));
 }
 
-TEST_F(TestBooleanRLE, TestBatchRead) {
+TEST_P(TestBooleanRLE, TestBatchRead) {
 #ifndef ARROW_WITH_ZLIB
   GTEST_SKIP() << "Test requires Zlib compression";
 #endif
@@ -374,10 +380,13 @@ TEST_F(TestBooleanRLE, TestBatchRead) {
   ASSERT_FALSE(col->HasNext());
 }
 
-class TestTextDeltaLengthByteArray : public ::testing::Test {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestBooleanRLE, ::testing::Values(0, 10, 42, 10000));
+
+class TestTextDeltaLengthByteArray
+    : public ::testing::TestWithParam<int64_t /* slice_size */> {
  public:
   void SetUp() {
-    reader_ = ParquetFileReader::OpenFile(data_file("delta_length_byte_array.parquet"));
+    reader_ = OpenFileReader(data_file("delta_length_byte_array.parquet"), GetParam());
   }
 
   void TearDown() {}
@@ -386,7 +395,7 @@ class TestTextDeltaLengthByteArray : public ::testing::Test {
   std::unique_ptr<ParquetFileReader> reader_;
 };
 
-TEST_F(TestTextDeltaLengthByteArray, TestTextScanner) {
+TEST_P(TestTextDeltaLengthByteArray, TestTextScanner) {
 #ifndef ARROW_WITH_ZSTD
   GTEST_SKIP() << "Test requires Zstd compression";
 #endif
@@ -410,7 +419,7 @@ TEST_F(TestTextDeltaLengthByteArray, TestTextScanner) {
   ASSERT_FALSE(scanner->NextValue(&val, &is_null));
 }
 
-TEST_F(TestTextDeltaLengthByteArray, TestBatchRead) {
+TEST_P(TestTextDeltaLengthByteArray, TestBatchRead) {
 #ifndef ARROW_WITH_ZSTD
   GTEST_SKIP() << "Test requires Zstd compression";
 #endif
@@ -464,9 +473,12 @@ TEST_F(TestTextDeltaLengthByteArray, TestBatchRead) {
   ASSERT_FALSE(col->HasNext());
 }
 
-class TestAllTypesPlain : public ::testing::Test {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestTextDeltaLengthByteArray,
+                         testing::Values(0, 10, 42, 10000));
+
+class TestAllTypesPlain : public ::testing::TestWithParam<int64_t /* slice_size */> {
  public:
-  void SetUp() { reader_ = ParquetFileReader::OpenFile(alltypes_plain()); }
+  void SetUp() { reader_ = OpenFileReader(alltypes_plain(), GetParam()); }
 
   void TearDown() {}
 
@@ -474,14 +486,14 @@ class TestAllTypesPlain : public ::testing::Test {
   std::unique_ptr<ParquetFileReader> reader_;
 };
 
-TEST_F(TestAllTypesPlain, NoopConstructDestruct) {}
+TEST_P(TestAllTypesPlain, NoopConstructDestruct) {}
 
-TEST_F(TestAllTypesPlain, RowGroupMetaData) {
+TEST_P(TestAllTypesPlain, RowGroupMetaData) {
   auto group = reader_->RowGroup(0);
   CheckRowGroupMetadata(group->metadata());
 }
 
-TEST_F(TestAllTypesPlain, TestBatchRead) {
+TEST_P(TestAllTypesPlain, TestBatchRead) {
   std::shared_ptr<RowGroupReader> group = reader_->RowGroup(0);
 
   // column 0, id
@@ -516,7 +528,7 @@ TEST_F(TestAllTypesPlain, TestBatchRead) {
   ASSERT_FALSE(col->HasNext());
 }
 
-TEST_F(TestAllTypesPlain, RowGroupColumnBoundsChecking) {
+TEST_P(TestAllTypesPlain, RowGroupColumnBoundsChecking) {
   // Part of PARQUET-1857
   ASSERT_THROW(reader_->RowGroup(reader_->metadata()->num_row_groups()),
                ParquetException);
@@ -527,7 +539,7 @@ TEST_F(TestAllTypesPlain, RowGroupColumnBoundsChecking) {
                ParquetException);
 }
 
-TEST_F(TestAllTypesPlain, TestFlatScannerInt32) {
+TEST_P(TestAllTypesPlain, TestFlatScannerInt32) {
   std::shared_ptr<RowGroupReader> group = reader_->RowGroup(0);
 
   // column 0, id
@@ -543,7 +555,7 @@ TEST_F(TestAllTypesPlain, TestFlatScannerInt32) {
   ASSERT_FALSE(scanner->NextValue(&val, &is_null));
 }
 
-TEST_F(TestAllTypesPlain, TestSetScannerBatchSize) {
+TEST_P(TestAllTypesPlain, TestSetScannerBatchSize) {
   std::shared_ptr<RowGroupReader> group = reader_->RowGroup(0);
 
   // column 0, id
@@ -554,7 +566,7 @@ TEST_F(TestAllTypesPlain, TestSetScannerBatchSize) {
   ASSERT_EQ(1024, scanner->batch_size());
 }
 
-TEST_F(TestAllTypesPlain, DebugPrintWorks) {
+TEST_P(TestAllTypesPlain, DebugPrintWorks) {
   std::stringstream ss;
 
   std::list<int> columns;
@@ -565,7 +577,7 @@ TEST_F(TestAllTypesPlain, DebugPrintWorks) {
   ASSERT_GT(result.size(), 0);
 }
 
-TEST_F(TestAllTypesPlain, ColumnSelection) {
+TEST_P(TestAllTypesPlain, ColumnSelection) {
   std::stringstream ss;
 
   std::list<int> columns;
@@ -579,7 +591,7 @@ TEST_F(TestAllTypesPlain, ColumnSelection) {
   ASSERT_GT(result.size(), 0);
 }
 
-TEST_F(TestAllTypesPlain, ColumnSelectionOutOfRange) {
+TEST_P(TestAllTypesPlain, ColumnSelectionOutOfRange) {
   std::stringstream ss;
 
   std::list<int> columns;
@@ -593,18 +605,23 @@ TEST_F(TestAllTypesPlain, ColumnSelectionOutOfRange) {
   ASSERT_THROW(printer2.DebugPrint(ss, columns), ParquetException);
 }
 
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestAllTypesPlain,
+                         testing::Values(0, 10, 42, 10000));
+
+class FileReaderTest : public ::testing::TestWithParam<int64_t /* slice_size */> {};
+
 // Tests that read_dense_for_nullable is passed down to the record
 // reader. The functionality of read_dense_for_nullable is tested
 // elsewhere.
-TEST(TestFileReader, RecordReaderReadDenseForNullable) {
+TEST_P(FileReaderTest, RecordReaderReadDenseForNullable) {
   // We test the default which is false, and also test enabling and disabling
   // read_dense_for_nullable.
   std::vector<ReaderProperties> reader_properties(3);
   reader_properties[1].enable_read_dense_for_nullable();
   reader_properties[2].disable_read_dense_for_nullable();
   for (const auto& reader_props : reader_properties) {
-    std::unique_ptr<ParquetFileReader> file_reader = ParquetFileReader::OpenFile(
-        alltypes_plain(), /* memory_map = */ false, reader_props);
+    std::unique_ptr<ParquetFileReader> file_reader = OpenFileReader(
+        alltypes_plain(), GetParam(), /* memory_map = */ false, reader_props);
     std::shared_ptr<RowGroupReader> group = file_reader->RowGroup(0);
     std::shared_ptr<internal::RecordReader> col_record_reader = group->RecordReader(0);
     ASSERT_EQ(reader_props.read_dense_for_nullable(),
@@ -613,10 +630,10 @@ TEST(TestFileReader, RecordReaderReadDenseForNullable) {
 }
 
 // Tests getting a record reader from a row group reader.
-TEST(TestFileReader, GetRecordReader) {
+TEST_P(FileReaderTest, GetRecordReader) {
   ReaderProperties reader_props;
-  std::unique_ptr<ParquetFileReader> file_reader = ParquetFileReader::OpenFile(
-      alltypes_plain(), /* memory_map = */ false, reader_props);
+  std::unique_ptr<ParquetFileReader> file_reader = OpenFileReader(
+      alltypes_plain(), GetParam(), /* memory_map = */ false, reader_props);
   std::shared_ptr<RowGroupReader> group = file_reader->RowGroup(0);
 
   std::shared_ptr<internal::RecordReader> col_record_reader_ = group->RecordReader(0);
@@ -629,7 +646,7 @@ TEST(TestFileReader, GetRecordReader) {
   ASSERT_EQ(8, col_record_reader_->levels_written());
 }
 
-TEST(TestFileReader, RecordReaderWithExposingDictionary) {
+TEST_P(FileReaderTest, RecordReaderWithExposingDictionary) {
   const int num_rows = 1000;
 
   // Make schema
@@ -667,13 +684,12 @@ TEST(TestFileReader, RecordReaderWithExposingDictionary) {
 
   // Open the reader
   ASSERT_OK_AND_ASSIGN(auto file_buf, out_file->Finish());
-  auto in_file = std::make_shared<::arrow::io::BufferReader>(file_buf);
 
   ReaderProperties reader_props;
   reader_props.enable_buffered_stream();
   reader_props.set_buffer_size(64);
   std::unique_ptr<ParquetFileReader> file_reader =
-      ParquetFileReader::Open(in_file, reader_props);
+      MakeBufferReader(file_buf, GetParam(), reader_props);
 
   auto row_group = file_reader->RowGroup(0);
   auto record_reader = std::dynamic_pointer_cast<internal::DictionaryRecordReader>(
@@ -706,7 +722,7 @@ TEST(TestFileReader, RecordReaderWithExposingDictionary) {
   }
 }
 
-class TestLocalFile : public ::testing::Test {
+class TestLocalFile : public ::testing::TestWithParam<int64_t /* slice_size */> {
  public:
   void SetUp() {
     std::string dir_string(test::get_data_dir());
@@ -715,23 +731,27 @@ class TestLocalFile : public ::testing::Test {
     ss << dir_string << "/"
        << "alltypes_plain.parquet";
 
-    PARQUET_ASSIGN_OR_THROW(handle, ReadableFile::Open(ss.str()));
-    fileno = handle->file_descriptor();
+    if (GetParam() == 0) {
+      PARQUET_ASSIGN_OR_THROW(handle, ReadableFile::Open(ss.str()));
+    } else {
+      handle = SimpleCordedRandomAccessFile::FromFile(ss.str(), GetParam());
+    }
   }
 
   void TearDown() {}
 
  protected:
-  int fileno;
-  std::shared_ptr<::arrow::io::ReadableFile> handle;
+  std::shared_ptr<::arrow::io::RandomAccessFile> handle;
 };
 
-TEST_F(TestLocalFile, OpenWithMetadata) {
+TEST_P(TestLocalFile, OpenWithMetadata) {
   // PARQUET-808
   std::stringstream ss;
   std::shared_ptr<FileMetaData> metadata = ReadMetaData(handle);
 
-  auto reader = ParquetFileReader::Open(handle, default_reader_properties(), metadata);
+  auto props = default_reader_properties();
+  if (GetParam() > 0) props.use_firebolt_corded_buffers();
+  auto reader = ParquetFileReader::Open(handle, props, metadata);
 
   // Compare pointers
   ASSERT_EQ(metadata.get(), reader->metadata().get());
@@ -741,18 +761,19 @@ TEST_F(TestLocalFile, OpenWithMetadata) {
   printer.DebugPrint(ss, columns, true);
 
   // Make sure OpenFile passes on the external metadata, too
-  auto reader2 = ParquetFileReader::OpenFile(alltypes_plain(), false,
-                                             default_reader_properties(), metadata);
+  auto reader2 = OpenFileReader(alltypes_plain(), GetParam(), false, props, metadata);
 
   // Compare pointers
   ASSERT_EQ(metadata.get(), reader2->metadata().get());
 }
 
-class TestCheckDataPageCrc : public ::testing::Test {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestLocalFile, ::testing::Values(0, 10, 42, 10000));
+
+class TestCheckDataPageCrc : public ::testing::TestWithParam<int64_t /* slice_size */> {
  public:
   void OpenExampleFile(const std::string& file_path) {
-    file_reader_ = ParquetFileReader::OpenFile(file_path,
-                                               /*memory_map=*/false, reader_props_);
+    file_reader_ = OpenFileReader(file_path, GetParam(),
+                                  /*memory_map=*/false, reader_props_);
     auto metadata_ptr = file_reader_->metadata();
     EXPECT_EQ(1, metadata_ptr->num_row_groups());
     EXPECT_EQ(2, metadata_ptr->num_columns());
@@ -850,7 +871,7 @@ class TestCheckDataPageCrc : public ::testing::Test {
   std::vector<std::unique_ptr<PageReader>> page_readers_;
 };
 
-TEST_F(TestCheckDataPageCrc, CorruptPageV1) {
+TEST_P(TestCheckDataPageCrc, CorruptPageV1) {
   // Works when not checking crc
   CheckCorrectCrc(data_page_v1_corrupt_checksum(),
                   /*page_checksum_verification=*/false);
@@ -883,14 +904,14 @@ TEST_F(TestCheckDataPageCrc, CorruptPageV1) {
   }
 }
 
-TEST_F(TestCheckDataPageCrc, UncompressedPageV1) {
+TEST_P(TestCheckDataPageCrc, UncompressedPageV1) {
   CheckCorrectCrc(data_page_v1_uncompressed_checksum(),
                   /*page_checksum_verification=*/false);
   CheckCorrectCrc(data_page_v1_uncompressed_checksum(),
                   /*page_checksum_verification=*/true);
 }
 
-TEST_F(TestCheckDataPageCrc, SnappyPageV1) {
+TEST_P(TestCheckDataPageCrc, SnappyPageV1) {
 #ifndef ARROW_WITH_SNAPPY
   GTEST_SKIP() << "Test requires Snappy compression";
 #endif
@@ -900,14 +921,14 @@ TEST_F(TestCheckDataPageCrc, SnappyPageV1) {
                   /*page_checksum_verification=*/true);
 }
 
-TEST_F(TestCheckDataPageCrc, UncompressedDict) {
+TEST_P(TestCheckDataPageCrc, UncompressedDict) {
   CheckCorrectDictCrc(plain_dict_uncompressed_checksum(),
                       /*page_checksum_verification=*/false);
   CheckCorrectDictCrc(plain_dict_uncompressed_checksum(),
                       /*page_checksum_verification=*/true);
 }
 
-TEST_F(TestCheckDataPageCrc, SnappyDict) {
+TEST_P(TestCheckDataPageCrc, SnappyDict) {
 #ifndef ARROW_WITH_SNAPPY
   GTEST_SKIP() << "Test requires Snappy compression";
 #endif
@@ -917,7 +938,7 @@ TEST_F(TestCheckDataPageCrc, SnappyDict) {
                       /*page_checksum_verification=*/true);
 }
 
-TEST_F(TestCheckDataPageCrc, CorruptDict) {
+TEST_P(TestCheckDataPageCrc, CorruptDict) {
   // Works when not checking crc
   CheckCorrectDictCrc(rle_dict_uncompressed_corrupt_checksum(),
                       /*page_checksum_verification=*/false);
@@ -946,12 +967,16 @@ TEST_F(TestCheckDataPageCrc, CorruptDict) {
   }
 }
 
-TEST(TestGzipMembersRead, TwoConcatenatedMembers) {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestCheckDataPageCrc,
+                         ::testing::Values(0, 10, 42, 10000));
+
+using TestGzipMembersRead = FileReaderTest;
+TEST_P(TestGzipMembersRead, TwoConcatenatedMembers) {
 #ifndef ARROW_WITH_ZLIB
   GTEST_SKIP() << "Test requires Zlib compression";
 #endif
-  auto file_reader = ParquetFileReader::OpenFile(concatenated_gzip_members(),
-                                                 /*memory_map=*/false);
+  auto file_reader = OpenFileReader(concatenated_gzip_members(), GetParam(),
+                                    /*memory_map=*/false);
   auto col_reader = std::dynamic_pointer_cast<TypedColumnReader<Int64Type>>(
       file_reader->RowGroup(0)->Column(0));
   int64_t num_values = 0;
@@ -968,13 +993,17 @@ TEST(TestGzipMembersRead, TwoConcatenatedMembers) {
   }
 }
 
-TEST(TestFileReaderAdHoc, NationDictTruncatedDataPage) {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestGzipMembersRead,
+                         ::testing::Values(0, 10, 42, 10000));
+
+using FileReaderTestAdHoc = FileReaderTest;
+TEST_P(FileReaderTestAdHoc, NationDictTruncatedDataPage) {
   // PARQUET-816. Some files generated by older Parquet implementations may
   // contain malformed data page metadata, and we can successfully decode them
   // if we optimistically proceed to decoding, even if there is not enough data
   // available in the stream. Before, we had quite aggressive checking of
   // stream reads, which are not found e.g. in Impala's Parquet implementation
-  auto reader = ParquetFileReader::OpenFile(nation_dict_truncated_data_page(), false);
+  auto reader = OpenFileReader(nation_dict_truncated_data_page(), GetParam(), false);
   std::stringstream ss;
 
   // empty list means print all
@@ -982,7 +1011,7 @@ TEST(TestFileReaderAdHoc, NationDictTruncatedDataPage) {
   ParquetFilePrinter printer1(reader.get());
   printer1.DebugPrint(ss, columns, true);
 
-  reader = ParquetFileReader::OpenFile(nation_dict_truncated_data_page(), true);
+  reader = OpenFileReader(nation_dict_truncated_data_page(), GetParam(), true);
   std::stringstream ss2;
   ParquetFilePrinter printer2(reader.get());
   printer2.DebugPrint(ss2, columns, true);
@@ -992,7 +1021,10 @@ TEST(TestFileReaderAdHoc, NationDictTruncatedDataPage) {
   ASSERT_EQ(ss2.str(), ss.str());
 }
 
-TEST(TestDumpWithLocalFile, DumpOutput) {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, FileReaderTestAdHoc,
+                         ::testing::Values(0, 10, 42, 10000));
+
+TEST_P(FileReaderTest, DumpWithLocalFileDumpOutput) {
 #ifndef ARROW_WITH_SNAPPY
   GTEST_SKIP() << "Test requires Snappy compression";
 #endif
@@ -1075,7 +1107,7 @@ Column 1
   std::stringstream ss_values, ss_dump;
   const char* file = "nested_lists.snappy.parquet";
   auto reader_props = default_reader_properties();
-  auto reader = ParquetFileReader::OpenFile(data_file(file), false, reader_props);
+  auto reader = OpenFileReader(data_file(file), GetParam(), false, reader_props);
   ParquetFilePrinter printer(reader.get());
 
   printer.DebugPrint(ss_values, columns, true, false, false, file);
@@ -1085,16 +1117,15 @@ Column 1
   ASSERT_EQ(header_output + dump_output, ss_dump.str());
 }
 
-class TestJSONWithLocalFile : public ::testing::Test {
+class TestJSONWithLocalFile : public ::testing::TestWithParam<int64_t /* slice_size */> {
  public:
   static std::string ReadFromLocalFile(std::string_view local_file_name) {
     std::stringstream ss;
     // empty list means print all
     std::list<int> columns;
 
-    auto reader =
-        ParquetFileReader::OpenFile(data_file(local_file_name.data()),
-                                    /*memory_map=*/false, default_reader_properties());
+    auto reader = OpenFileReader(data_file(local_file_name.data()), GetParam(),
+                                 /*memory_map=*/false, default_reader_properties());
     ParquetFilePrinter printer(reader.get());
     printer.JSONPrint(ss, columns, local_file_name.data());
 
@@ -1102,7 +1133,7 @@ class TestJSONWithLocalFile : public ::testing::Test {
   }
 };
 
-TEST_F(TestJSONWithLocalFile, JSONOutput) {
+TEST_P(TestJSONWithLocalFile, JSONOutput) {
   std::string json_output = R"###({
   "FileName": "alltypes_plain.parquet",
   "Version": "1.0",
@@ -1160,7 +1191,7 @@ TEST_F(TestJSONWithLocalFile, JSONOutput) {
   ASSERT_EQ(json_output, json_content);
 }
 
-TEST_F(TestJSONWithLocalFile, JSONOutputFLBA) {
+TEST_P(TestJSONWithLocalFile, JSONOutputFLBA) {
   // min-max stats for FLBA contains non-utf8 output, so we don't check
   // the whole json output.
   std::string json_content = ReadFromLocalFile("fixed_length_byte_array.parquet");
@@ -1180,7 +1211,7 @@ TEST_F(TestJSONWithLocalFile, JSONOutputFLBA) {
   EXPECT_THAT(json_content, testing::HasSubstr(json_contains));
 }
 
-TEST_F(TestJSONWithLocalFile, JSONOutputSortColumns) {
+TEST_P(TestJSONWithLocalFile, JSONOutputSortColumns) {
   std::string json_content = ReadFromLocalFile("sort_columns.parquet");
 
   std::string json_contains = R"###("SortColumns": [
@@ -1191,7 +1222,7 @@ TEST_F(TestJSONWithLocalFile, JSONOutputSortColumns) {
 }
 
 // GH-44101: Test that JSON output is valid JSON
-TEST_F(TestJSONWithLocalFile, ValidJsonOutput) {
+TEST_P(TestJSONWithLocalFile, ValidJsonOutput) {
   auto check_json_valid = [](std::string_view json_string) -> ::arrow::Status {
     rj::Document json_doc;
     constexpr auto kParseFlags = rj::kParseFullPrecisionFlag | rj::kParseNanAndInfFlag;
@@ -1217,7 +1248,10 @@ TEST_F(TestJSONWithLocalFile, ValidJsonOutput) {
   }
 }
 
-TEST(TestFileReader, BufferedReadsWithDictionary) {
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestJSONWithLocalFile,
+                         ::testing::Values(0, 10, 42, 10000));
+
+TEST_P(FileReaderTest, BufferedReadsWithDictionary) {
   const int num_rows = 1000;
 
   // Make schema
@@ -1251,13 +1285,12 @@ TEST(TestFileReader, BufferedReadsWithDictionary) {
 
   // Open the reader
   ASSERT_OK_AND_ASSIGN(auto file_buf, out_file->Finish());
-  auto in_file = std::make_shared<::arrow::io::BufferReader>(file_buf);
 
   ReaderProperties reader_props;
   reader_props.enable_buffered_stream();
   reader_props.set_buffer_size(64);
   std::unique_ptr<ParquetFileReader> file_reader =
-      ParquetFileReader::Open(in_file, reader_props);
+      MakeBufferReader(file_buf, GetParam(), reader_props);
 
   auto row_group = file_reader->RowGroup(0);
   auto col_reader = std::static_pointer_cast<DoubleReader>(
@@ -1294,7 +1327,7 @@ TEST(TestFileReader, BufferedReadsWithDictionary) {
   }
 }
 
-TEST(TestFileReader, PartiallyDictionaryEncodingNotExposed) {
+TEST_P(FileReaderTest, PartiallyDictionaryEncodingNotExposed) {
   const int num_rows = 1000;
 
   // Make schema
@@ -1330,13 +1363,12 @@ TEST(TestFileReader, PartiallyDictionaryEncodingNotExposed) {
 
   // Open the reader
   ASSERT_OK_AND_ASSIGN(auto file_buf, out_file->Finish());
-  auto in_file = std::make_shared<::arrow::io::BufferReader>(file_buf);
 
   ReaderProperties reader_props;
   reader_props.enable_buffered_stream();
   reader_props.set_buffer_size(64);
   std::unique_ptr<ParquetFileReader> file_reader =
-      ParquetFileReader::Open(in_file, reader_props);
+      MakeBufferReader(file_buf, GetParam(), reader_props);
 
   auto row_group = file_reader->RowGroup(0);
   auto col_reader = std::static_pointer_cast<DoubleReader>(
@@ -1344,7 +1376,7 @@ TEST(TestFileReader, PartiallyDictionaryEncodingNotExposed) {
   EXPECT_NE(col_reader->GetExposedEncoding(), ExposedEncoding::DICTIONARY);
 }
 
-TEST(TestFileReader, BufferedReads) {
+TEST_P(FileReaderTest, BufferedReads) {
   // PARQUET-1636: Buffered reads were broken before introduction of
   // RandomAccessFile::GetStream
 
@@ -1394,13 +1426,12 @@ TEST(TestFileReader, BufferedReads) {
 
   // Open the reader
   ASSERT_OK_AND_ASSIGN(auto file_buf, out_file->Finish());
-  auto in_file = std::make_shared<::arrow::io::BufferReader>(file_buf);
 
   ReaderProperties reader_props;
   reader_props.enable_buffered_stream();
   reader_props.set_buffer_size(64);
   std::unique_ptr<ParquetFileReader> file_reader =
-      ParquetFileReader::Open(in_file, reader_props);
+      MakeBufferReader(file_buf, GetParam(), reader_props);
 
   auto row_group = file_reader->RowGroup(0);
   std::vector<std::shared_ptr<DoubleReader>> col_readers;
@@ -1429,9 +1460,10 @@ TEST(TestFileReader, BufferedReads) {
   }
 }
 
-std::unique_ptr<ParquetFileReader> OpenBuffer(const std::string& contents) {
+std::unique_ptr<ParquetFileReader> OpenBuffer(const std::string& contents,
+                                              int64_t slice_size) {
   auto buffer = ::arrow::Buffer::FromString(contents);
-  return ParquetFileReader::Open(std::make_shared<::arrow::io::BufferReader>(buffer));
+  return MakeBufferReader(buffer, slice_size);
 }
 
 ::arrow::Future<> OpenBufferAsync(const std::string& contents) {
@@ -1440,32 +1472,37 @@ std::unique_ptr<ParquetFileReader> OpenBuffer(const std::string& contents) {
       ParquetFileReader::OpenAsync(std::make_shared<::arrow::io::BufferReader>(buffer)));
 }
 
-TEST(TestFileReader, TestOpenErrors) {
+TEST_P(FileReaderTest, TestOpenErrors) {
   EXPECT_THROW_THAT(
-      []() { OpenBuffer(""); }, ParquetInvalidOrCorruptedFileException,
+      []() { OpenBuffer("", GetParam()); }, ParquetInvalidOrCorruptedFileException,
       ::testing::Property(&ParquetInvalidOrCorruptedFileException::what,
                           ::testing::HasSubstr("Parquet file size is 0 bytes")));
   EXPECT_THROW_THAT(
-      []() { OpenBuffer("AAAAPAR0"); }, ParquetInvalidOrCorruptedFileException,
+      []() { OpenBuffer("AAAAPAR0", GetParam()); },
+      ParquetInvalidOrCorruptedFileException,
       ::testing::Property(&ParquetInvalidOrCorruptedFileException::what,
                           ::testing::HasSubstr("Parquet magic bytes not found")));
   EXPECT_THROW_THAT(
-      []() { OpenBuffer("APAR1"); }, ParquetInvalidOrCorruptedFileException,
+      []() { OpenBuffer("APAR1", GetParam()); }, ParquetInvalidOrCorruptedFileException,
       ::testing::Property(
           &ParquetInvalidOrCorruptedFileException::what,
           ::testing::HasSubstr(
               "Parquet file size is 5 bytes, smaller than the minimum file footer")));
   EXPECT_THROW_THAT(
-      []() { OpenBuffer("\xFF\xFF\xFF\x0FPAR1"); },
+      []() { OpenBuffer("\xFF\xFF\xFF\x0FPAR1", GetParam()); },
       ParquetInvalidOrCorruptedFileException,
       ::testing::Property(&ParquetInvalidOrCorruptedFileException::what,
                           ::testing::HasSubstr("Parquet file size is 8 bytes, smaller "
                                                "than the size reported by footer's")));
   EXPECT_THROW_THAT(
-      []() { OpenBuffer(std::string("\x00\x00\x00\x00PAR1", 8)); }, ParquetException,
+      []() { OpenBuffer(std::string("\x00\x00\x00\x00PAR1", 8), GetParam()); },
+      ParquetException,
       ::testing::Property(
           &ParquetException::what,
           ::testing::HasSubstr("Couldn't deserialize thrift: No more data to read")));
+
+  // Async interface is not implemented for corded buffers
+  if (GetParam() > 0) return;
 
   EXPECT_FINISHES_AND_RAISES_WITH_MESSAGE_THAT(
       Invalid, ::testing::HasSubstr("Parquet file size is 0 bytes"), OpenBufferAsync(""));
@@ -1494,6 +1531,7 @@ struct TestCodecParam {
   std::string name;
   std::string small_data_file;
   std::string larger_data_file;
+  int64_t slice_size;
 };
 
 void PrintTo(const TestCodecParam& p, std::ostream* os) { *os << p.name; }
@@ -1507,7 +1545,7 @@ class TestCodec : public ::testing::TestWithParam<TestCodecParam> {
 
 TEST_P(TestCodec, SmallFileMetadataAndValues) {
   std::unique_ptr<ParquetFileReader> reader_ =
-      ParquetFileReader::OpenFile(GetSmallDataFile());
+      OpenFileReader(GetSmallDataFile(), GetParam().slice_size);
   std::shared_ptr<RowGroupReader> group = reader_->RowGroup(0);
   const auto rg_metadata = group->metadata();
 
@@ -1553,7 +1591,7 @@ TEST_P(TestCodec, LargeFileValues) {
   if (file_path.empty()) {
     GTEST_SKIP() << "Larger data file not available for this codec";
   }
-  auto file = ParquetFileReader::OpenFile(file_path);
+  auto file = OpenFileReader(file_path, GetParam().slice_size);
   auto group = file->RowGroup(0);
 
   const int64_t kNumRows = 10000;
@@ -1578,9 +1616,18 @@ TEST_P(TestCodec, LargeFileValues) {
 }
 
 std::vector<TestCodecParam> test_codec_params{
-    {"LegacyLZ4Hadoop", hadoop_lz4_compressed(), hadoop_lz4_compressed_larger()},
-    {"LegacyLZ4NonHadoop", non_hadoop_lz4_compressed(), ""},
-    {"LZ4Raw", lz4_raw_compressed(), lz4_raw_compressed_larger()}};
+    {"LegacyLZ4Hadoop", hadoop_lz4_compressed(), hadoop_lz4_compressed_larger(), 0},
+    {"LegacyLZ4NonHadoop", non_hadoop_lz4_compressed(), "", 0},
+    {"LZ4Raw", lz4_raw_compressed(), lz4_raw_compressed_larger(), 0},
+    {"LegacyLZ4HadoopSlice10", hadoop_lz4_compressed(), hadoop_lz4_compressed_larger(),
+     10},
+    {"LegacyLZ4NonHadoopSlice10", non_hadoop_lz4_compressed(), "", 10},
+    {"LZ4RawSlice10", lz4_raw_compressed(), lz4_raw_compressed_larger(), 10},
+    {"LegacyLZ4HadoopSlice10k", hadoop_lz4_compressed(), hadoop_lz4_compressed_larger(),
+     10000},
+    {"LegacyLZ4NonHadoopSlice10k", non_hadoop_lz4_compressed(), "", 10000},
+    {"LZ4RawSlice10k", lz4_raw_compressed(), lz4_raw_compressed_larger(), 10000},
+};
 
 INSTANTIATE_TEST_SUITE_P(Lz4CodecTests, TestCodec, ::testing::ValuesIn(test_codec_params),
                          testing::PrintToStringParamName());
@@ -1588,10 +1635,12 @@ INSTANTIATE_TEST_SUITE_P(Lz4CodecTests, TestCodec, ::testing::ValuesIn(test_code
 
 // Test reading a data file with a ColumnChunk contains more than
 // INT16_MAX pages. (GH-15074).
-TEST(TestFileReader, TestOverflowInt16PageOrdinal) {
+TEST_P(FileReaderTest, TestOverflowInt16PageOrdinal) {
+  if (GetParam() < 42)
+    GTEST_SKIP() << "Skipping slow test for tiny slice size " << GetParam();
   ReaderProperties reader_props;
-  auto file_reader = ParquetFileReader::OpenFile(overflow_i16_page_ordinal(),
-                                                 /*memory_map=*/false, reader_props);
+  auto file_reader = OpenFileReader(overflow_i16_page_ordinal(), GetParam(),
+                                    /*memory_map=*/false, reader_props);
   auto metadata_ptr = file_reader->metadata();
   EXPECT_EQ(1, metadata_ptr->num_row_groups());
   EXPECT_EQ(1, metadata_ptr->num_columns());
@@ -1626,10 +1675,13 @@ TEST(TestFileReader, TestOverflowInt16PageOrdinal) {
   }
 }
 
+INSTANTIATE_TEST_SUITE_P(ReaderTest, FileReaderTest, ::testing::Values(0, 10, 42, 10000));
+
+using TestByteStreamSplit = FileReaderTest;
 #ifdef ARROW_WITH_ZSTD
-TEST(TestByteStreamSplit, FloatIntegrationFile) {
+TEST_P(TestByteStreamSplit, FloatIntegrationFile) {
   auto file_path = byte_stream_split();
-  auto file = ParquetFileReader::OpenFile(file_path);
+  auto file = OpenFileReader(file_path, GetParam());
 
   const int64_t kNumRows = 300;
 
@@ -1659,9 +1711,9 @@ TEST(TestByteStreamSplit, FloatIntegrationFile) {
 #endif  // ARROW_WITH_ZSTD
 
 #ifdef ARROW_WITH_ZLIB
-TEST(TestByteStreamSplit, ExtendedIntegrationFile) {
+TEST_P(TestByteStreamSplit, ExtendedIntegrationFile) {
   auto file_path = byte_stream_split_extended();
-  auto file = ParquetFileReader::OpenFile(file_path);
+  auto file = OpenFileReader(file_path, GetParam());
 
   const int64_t kNumRows = 200;
 
@@ -1686,10 +1738,14 @@ TEST(TestByteStreamSplit, ExtendedIntegrationFile) {
 }
 #endif  // ARROW_WITH_ZLIB
 
+INSTANTIATE_TEST_SUITE_P(ReaderTest, TestByteStreamSplit,
+                         ::testing::Values(0, 10, 42, 10000));
+
 struct PageIndexReaderParam {
   std::vector<int32_t> row_group_indices;
   std::vector<int32_t> column_indices;
   PageIndexSelection index_selection;
+  int64_t slice_size;
 };
 
 // For valgrind
@@ -1714,8 +1770,9 @@ class ParameterizedPageIndexReaderTest
 // Test reading a data file with page index.
 TEST_P(ParameterizedPageIndexReaderTest, TestReadPageIndex) {
   ReaderProperties properties;
-  auto file_reader = ParquetFileReader::OpenFile(data_file("alltypes_tiny_pages.parquet"),
-                                                 /*memory_map=*/false, properties);
+  auto file_reader =
+      OpenFileReader(data_file("alltypes_tiny_pages.parquet"), GetParam().slice_size,
+                     /*memory_map=*/false, properties);
   auto metadata = file_reader->metadata();
   EXPECT_EQ(1, metadata->num_row_groups());
   EXPECT_EQ(13, metadata->num_columns());
@@ -1764,7 +1821,16 @@ TEST_P(ParameterizedPageIndexReaderTest, TestReadPageIndex) {
         PageLocation{4, 109, 0}, PageLocation{11480, 133, 2244},
         PageLocation{22980, 133, 4494}, PageLocation{34480, 133, 6744}};
 
-    auto offset_index = row_group_index_reader->GetOffsetIndex(0);
+    std::shared_ptr<OffsetIndex> offset_index;
+    if (GetParam().slice_size == 0) {
+      offset_index = row_group_index_reader->GetOffsetIndex(0);
+    } else {
+      // TODO(knight-bus): implement RowGroupPageIndexReader on corded buffers
+      EXPECT_THROW(
+          { offset_index = row_group_index_reader->GetOffsetIndex(0); },
+          ParquetException);
+      GTEST_SKIP() << "Cannot continue testing PageIndexReader with corded buffers";
+    }
     ASSERT_NE(nullptr, offset_index);
 
     EXPECT_EQ(num_pages, offset_index->page_locations().size());
@@ -1793,7 +1859,16 @@ TEST_P(ParameterizedPageIndexReaderTest, TestReadPageIndex) {
     const std::vector<int64_t> min_values = {0, 10, 0, 0};
     const std::vector<int64_t> max_values = {90, 90, 80, 70};
 
-    auto column_index = row_group_index_reader->GetColumnIndex(5);
+    std::shared_ptr<ColumnIndex> column_index;
+    if (GetParam().slice_size == 0) {
+      column_index = row_group_index_reader->GetColumnIndex(5);
+    } else {
+      // TODO(knight-bus): implement RowGroupPageIndexReader on corded buffers
+      EXPECT_THROW(
+          { column_index = row_group_index_reader->GetColumnIndex(5); },
+          ParquetException);
+      GTEST_SKIP() << "Cannot continue testing PageIndexReader with corded buffers";
+    };
     ASSERT_NE(nullptr, column_index);
     auto typed_column_index = std::dynamic_pointer_cast<Int64ColumnIndex>(column_index);
     ASSERT_NE(nullptr, typed_column_index);
@@ -1823,31 +1898,53 @@ TEST_P(ParameterizedPageIndexReaderTest, TestReadPageIndex) {
 
 INSTANTIATE_TEST_SUITE_P(
     PageIndexReaderTests, ParameterizedPageIndexReaderTest,
-    ::testing::Values(PageIndexReaderParam{{}, {}, {true, true}},
-                      PageIndexReaderParam{{}, {}, {true, false}},
-                      PageIndexReaderParam{{}, {}, {false, true}},
-                      PageIndexReaderParam{{}, {}, {false, false}},
-                      PageIndexReaderParam{{0}, {}, {true, true}},
-                      PageIndexReaderParam{{0}, {}, {true, false}},
-                      PageIndexReaderParam{{0}, {}, {false, true}},
-                      PageIndexReaderParam{{0}, {}, {false, false}},
-                      PageIndexReaderParam{{0}, {0}, {true, true}},
-                      PageIndexReaderParam{{0}, {0}, {true, false}},
-                      PageIndexReaderParam{{0}, {0}, {false, true}},
-                      PageIndexReaderParam{{0}, {0}, {false, false}},
-                      PageIndexReaderParam{{0}, {5}, {true, true}},
-                      PageIndexReaderParam{{0}, {5}, {true, false}},
-                      PageIndexReaderParam{{0}, {5}, {false, true}},
-                      PageIndexReaderParam{{0}, {5}, {false, false}},
-                      PageIndexReaderParam{{0}, {0, 5}, {true, true}},
-                      PageIndexReaderParam{{0}, {0, 5}, {true, false}},
-                      PageIndexReaderParam{{0}, {0, 5}, {false, true}},
-                      PageIndexReaderParam{{0}, {0, 5}, {false, false}}));
+    ::testing::Values(PageIndexReaderParam{{}, {}, {true, true}, 0},
+                      PageIndexReaderParam{{}, {}, {true, false}, 0},
+                      PageIndexReaderParam{{}, {}, {false, true}, 0},
+                      PageIndexReaderParam{{}, {}, {false, false}, 0},
+                      PageIndexReaderParam{{0}, {}, {true, true}, 0},
+                      PageIndexReaderParam{{0}, {}, {true, false}, 0},
+                      PageIndexReaderParam{{0}, {}, {false, true}, 0},
+                      PageIndexReaderParam{{0}, {}, {false, false}, 0},
+                      PageIndexReaderParam{{0}, {0}, {true, true}, 0},
+                      PageIndexReaderParam{{0}, {0}, {true, false}, 0},
+                      PageIndexReaderParam{{0}, {0}, {false, true}, 0},
+                      PageIndexReaderParam{{0}, {0}, {false, false}, 0},
+                      PageIndexReaderParam{{0}, {5}, {true, true}, 0},
+                      PageIndexReaderParam{{0}, {5}, {true, false}, 0},
+                      PageIndexReaderParam{{0}, {5}, {false, true}, 0},
+                      PageIndexReaderParam{{0}, {5}, {false, false}, 0},
+                      PageIndexReaderParam{{0}, {0, 5}, {true, true}, 0},
+                      PageIndexReaderParam{{0}, {0, 5}, {true, false}, 0},
+                      PageIndexReaderParam{{0}, {0, 5}, {false, true}, 0},
+                      PageIndexReaderParam{{0}, {0, 5}, {false, false}, 0},
+                      // corded
+                      PageIndexReaderParam{{}, {}, {true, true}, 42},
+                      PageIndexReaderParam{{}, {}, {true, false}, 42},
+                      PageIndexReaderParam{{}, {}, {false, true}, 42},
+                      PageIndexReaderParam{{}, {}, {false, false}, 42},
+                      PageIndexReaderParam{{0}, {}, {true, true}, 42},
+                      PageIndexReaderParam{{0}, {}, {true, false}, 42},
+                      PageIndexReaderParam{{0}, {}, {false, true}, 42},
+                      PageIndexReaderParam{{0}, {}, {false, false}, 42},
+                      PageIndexReaderParam{{0}, {0}, {true, true}, 42},
+                      PageIndexReaderParam{{0}, {0}, {true, false}, 42},
+                      PageIndexReaderParam{{0}, {0}, {false, true}, 42},
+                      PageIndexReaderParam{{0}, {0}, {false, false}, 42},
+                      PageIndexReaderParam{{0}, {5}, {true, true}, 42},
+                      PageIndexReaderParam{{0}, {5}, {true, false}, 42},
+                      PageIndexReaderParam{{0}, {5}, {false, true}, 42},
+                      PageIndexReaderParam{{0}, {5}, {false, false}, 42},
+                      PageIndexReaderParam{{0}, {0, 5}, {true, true}, 42},
+                      PageIndexReaderParam{{0}, {0, 5}, {true, false}, 42},
+                      PageIndexReaderParam{{0}, {0, 5}, {false, true}, 42},
+                      PageIndexReaderParam{{0}, {0, 5}, {false, false}, 42}));
 
-TEST(PageIndexReaderTest, ReadFileWithoutPageIndex) {
+using PageIndexReaderTest = FileReaderTest;
+TEST_P(PageIndexReaderTest, ReadFileWithoutPageIndex) {
   ReaderProperties properties;
-  auto file_reader = ParquetFileReader::OpenFile(data_file("int32_decimal.parquet"),
-                                                 /*memory_map=*/false, properties);
+  auto file_reader = OpenFileReader(data_file("int32_decimal.parquet"), GetParam(),
+                                    /*memory_map=*/false, properties);
   auto metadata = file_reader->metadata();
   EXPECT_EQ(1, metadata->num_row_groups());
 
@@ -1856,5 +1953,8 @@ TEST(PageIndexReaderTest, ReadFileWithoutPageIndex) {
   auto row_group_index_reader = page_index_reader->RowGroup(0);
   ASSERT_EQ(nullptr, row_group_index_reader);
 }
+
+INSTANTIATE_TEST_SUITE_P(ReaderTest, PageIndexReaderTest,
+                         ::testing::Values(0, 10, 42, 10000));
 
 }  // namespace parquet

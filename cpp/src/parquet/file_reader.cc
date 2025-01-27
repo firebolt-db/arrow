@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "arrow/corded_buffer.h"
 #include "arrow/io/caching.h"
 #include "arrow/io/file.h"
 #include "arrow/io/memory.h"
@@ -460,9 +461,41 @@ class SerializedFile : public ParquetFileReader::Contents {
             // Prevent out of bounds reads for bad hints
             ? std::min(std::max<int64_t>(0, *footer_read_size_hint), source_size_)
             : GetFooterReadSize();
-    PARQUET_ASSIGN_OR_THROW(
-        auto footer_buffer,
-        source_->ReadAt(source_size_ - footer_read_size, footer_read_size));
+
+    // Helper to read from a corded buffer into a contiguous buffer
+    auto read_corded = [this](int64_t position,
+                              int64_t length) -> std::shared_ptr<Buffer> {
+      auto corded_source =
+          std::dynamic_pointer_cast<::arrow::io::CordedRandomAccessFile>(source_);
+      if (corded_source == nullptr) {
+        throw ParquetException(
+            "Expected CordedRandomAccessFile when using Firebolt's corded buffers");
+      }
+      PARQUET_ASSIGN_OR_THROW(auto corded_buffer,
+                              corded_source->ReadCordedAt(position, length));
+      // Happy path: entire read is in a single place, no copy needed
+      if (corded_buffer.num_slices() == 1) {
+        const auto& slice = corded_buffer.slice(0);
+        return std::make_shared<Buffer>(reinterpret_cast<const uint8_t*>(slice.data()),
+                                        slice.size());
+      }
+
+      PARQUET_ASSIGN_OR_THROW(auto buffer, ::arrow::AllocateBuffer(length));
+      auto copied =
+          ::arrow::util::MemcpyFromCorded(buffer->mutable_data(), corded_buffer, length);
+      if (copied != length)
+        throw ParquetException("premature buffer end while parsing metadata");
+      return buffer;
+    };
+
+    std::shared_ptr<Buffer> footer_buffer;
+    if (properties_.firebolt_corded_buffers()) {
+      footer_buffer = read_corded(source_size_ - footer_read_size, footer_read_size);
+    } else {
+      PARQUET_ASSIGN_OR_THROW(
+          footer_buffer,
+          source_->ReadAt(source_size_ - footer_read_size, footer_read_size));
+    }
     uint32_t metadata_len = ParseFooterLength(footer_buffer, footer_read_size);
     int64_t metadata_start = source_size_ - kFooterSize - metadata_len;
 
@@ -470,6 +503,8 @@ class SerializedFile : public ParquetFileReader::Contents {
     if (footer_read_size >= (metadata_len + kFooterSize)) {
       metadata_buffer = SliceBuffer(
           footer_buffer, footer_read_size - metadata_len - kFooterSize, metadata_len);
+    } else if (properties_.firebolt_corded_buffers()) {
+      metadata_buffer = read_corded(metadata_start, metadata_len);
     } else {
       PARQUET_ASSIGN_OR_THROW(metadata_buffer,
                               source_->ReadAt(metadata_start, metadata_len));
@@ -487,6 +522,13 @@ class SerializedFile : public ParquetFileReader::Contents {
       // Read the actual footer
       metadata_start = read_size.first;
       metadata_len = read_size.second;
+      if (properties_.firebolt_corded_buffers()) {
+        // TODO(knight-bus): we probably just need to do `metadata_buffer =
+        // read_corded(metadata_start, metadata_len);` to support this but it would need
+        // proper testing, so raising an exception for now
+        throw ParquetException(
+            "Encrypted footers are not supported with Firebolt's corded buffers");
+      }
       PARQUET_ASSIGN_OR_THROW(metadata_buffer,
                               source_->ReadAt(metadata_start, metadata_len));
       // Fall through
@@ -972,7 +1014,12 @@ void ParquetFileReader::PreBuffer(const std::vector<int>& row_groups,
 
 std::shared_ptr<FileMetaData> ReadMetaData(
     const std::shared_ptr<::arrow::io::RandomAccessFile>& source) {
-  return ParquetFileReader::Open(source)->metadata();
+  auto properties = default_reader_properties();
+  // Need to explicitly enable corded buffers
+  if (dynamic_cast<::arrow::io::CordedRandomAccessFile*>(source.get()) != nullptr) {
+    properties.use_firebolt_corded_buffers();
+  }
+  return ParquetFileReader::Open(source, properties)->metadata();
 }
 
 // ----------------------------------------------------------------------

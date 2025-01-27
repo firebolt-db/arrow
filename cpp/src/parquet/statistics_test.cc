@@ -44,6 +44,7 @@
 #include "parquet/platform.h"
 #include "parquet/schema.h"
 #include "parquet/statistics.h"
+#include "parquet/test_corded_file.h"
 #include "parquet/test_util.h"
 #include "parquet/thrift_internal.h"
 #include "parquet/types.h"
@@ -400,7 +401,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     ASSERT_EQ(false, statistics_have_minmax1->Equals(*statistics_no_minmax));
   }
 
-  void TestFullRoundtrip(int64_t num_values, int64_t null_count) {
+  void TestFullRoundtrip(int64_t num_values, int64_t null_count, int64_t slice_size) {
     this->GenerateData(num_values);
 
     // compute statistics for the whole batch
@@ -438,8 +439,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     file_writer->Close();
 
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-    auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-    auto file_reader = ParquetFileReader::Open(source);
+    auto file_reader = MakeBufferReader(buffer, slice_size);
     auto rg_reader = file_reader->RowGroup(0);
     auto column_chunk = rg_reader->metadata()->ColumnChunk(0);
     if (!column_chunk->is_stats_set()) return;
@@ -573,9 +573,11 @@ TYPED_TEST(TestStatistics, Equals) {
 
 TYPED_TEST(TestStatistics, FullRoundtrip) {
   this->SetUpSchema(Repetition::OPTIONAL);
-  ASSERT_NO_FATAL_FAILURE(this->TestFullRoundtrip(100, 31));
-  ASSERT_NO_FATAL_FAILURE(this->TestFullRoundtrip(1000, 415));
-  ASSERT_NO_FATAL_FAILURE(this->TestFullRoundtrip(10000, 926));
+  for (auto slice_size : {0, 10, 42, 10000}) {
+    ASSERT_NO_FATAL_FAILURE(this->TestFullRoundtrip(100, 31, slice_size));
+    ASSERT_NO_FATAL_FAILURE(this->TestFullRoundtrip(1000, 415, slice_size));
+    ASSERT_NO_FATAL_FAILURE(this->TestFullRoundtrip(10000, 926, slice_size));
+  }
 }
 
 template <typename TestType>
@@ -940,13 +942,12 @@ class TestStatisticsSortOrder : public ::testing::Test {
     }
   }
 
-  void VerifyParquetStats() {
+  void VerifyParquetStats(int64_t slice_size) {
     ASSERT_OK_AND_ASSIGN(auto pbuffer, parquet_sink_->Finish());
 
     // Create a ParquetReader instance
     std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
-        parquet::ParquetFileReader::Open(
-            std::make_shared<::arrow::io::BufferReader>(pbuffer));
+        MakeBufferReader(pbuffer, slice_size);
 
     // Get the File MetaData
     std::shared_ptr<parquet::FileMetaData> file_metadata = parquet_reader->metadata();
@@ -1156,7 +1157,9 @@ TYPED_TEST(TestStatisticsSortOrder, MinMax) {
   this->AddNodes("Column ");
   this->SetUpSchema();
   this->WriteParquet();
-  ASSERT_NO_FATAL_FAILURE(this->VerifyParquetStats());
+  for (auto slice_size : {0, 10, 42, 10000}) {
+    ASSERT_NO_FATAL_FAILURE(this->VerifyParquetStats(slice_size));
+  }
 }
 
 template <typename ArrowType>

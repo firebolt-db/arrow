@@ -312,7 +312,7 @@ if(WIN32 AND NOT (ARROW_TEST_LINKAGE STREQUAL "static"))
 endif()
 
 if(ARROW_TESTING)
-  add_library(parquet_testing OBJECT test_util.cc)
+  add_library(parquet_testing OBJECT test_util.cc test_corded_file.cc)
   # Even though this is still just an object library we still need to
   # "link" our dependencies so that include paths are configured
   # correctly
