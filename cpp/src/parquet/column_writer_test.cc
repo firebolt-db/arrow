@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 
 #include "arrow/io/buffered.h"
@@ -43,6 +44,7 @@
 #include "parquet/platform.h"
 #include "parquet/properties.h"
 #include "parquet/statistics.h"
+#include "parquet/test_corded_file.h"
 #include "parquet/test_util.h"
 #include "parquet/types.h"
 
@@ -1467,7 +1469,10 @@ TEST(TestLevelEncoder, MinimumBufferSize2) {
   }
 }
 
-TEST(TestColumnWriter, WriteDataPageV2Header) {
+class ParamTest : public ::testing::TestWithParam<int64_t /* slice_size */> {};
+using TestColumnWriter = ParamTest;
+
+TEST_P(TestColumnWriter, WriteDataPageV2Header) {
   auto sink = CreateOutputStream();
   auto schema = std::static_pointer_cast<GroupNode>(
       GroupNode::Make("schema", Repetition::REQUIRED,
@@ -1508,8 +1513,7 @@ TEST(TestColumnWriter, WriteDataPageV2Header) {
 
   ASSERT_NO_THROW(file_writer->Close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
-      std::make_shared<::arrow::io::BufferReader>(buffer), default_reader_properties());
+  auto file_reader = MakeBufferReader(buffer, GetParam());
   auto metadata = file_reader->metadata();
   ASSERT_EQ(1, metadata->num_row_groups());
   auto row_group_reader = file_reader->RowGroup(0);
@@ -1553,7 +1557,7 @@ TEST(TestColumnWriter, WriteDataPageV2Header) {
 
 // The test below checks that data page v2 changes on record boundaries for
 // all repetition types (i.e. required, optional, and repeated)
-TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
+TEST_P(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
   auto sink = CreateOutputStream();
   auto schema = std::static_pointer_cast<GroupNode>(
       GroupNode::Make("schema", Repetition::REQUIRED,
@@ -1596,8 +1600,7 @@ TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
 
   ASSERT_NO_THROW(file_writer->Close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
-      std::make_shared<::arrow::io::BufferReader>(buffer), default_reader_properties());
+  auto file_reader = MakeBufferReader(buffer, GetParam());
   auto metadata = file_reader->metadata();
   ASSERT_EQ(1, metadata->num_row_groups());
   auto row_group_reader = file_reader->RowGroup(0);
@@ -1628,7 +1631,7 @@ TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
 
 // The test below checks that data page v2 changes on record boundaries for
 // repeated columns with small batches.
-TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundariesWithSmallBatches) {
+TEST_P(TestColumnWriter, WriteDataPagesChangeOnRecordBoundariesWithSmallBatches) {
   auto sink = CreateOutputStream();
   auto schema = std::static_pointer_cast<GroupNode>(
       GroupNode::Make("schema", Repetition::REQUIRED,
@@ -1690,8 +1693,7 @@ TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundariesWithSmallBatches) {
 
   ASSERT_NO_THROW(file_writer->Close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
-      std::make_shared<::arrow::io::BufferReader>(buffer), default_reader_properties());
+  auto file_reader = MakeBufferReader(buffer, GetParam());
   auto metadata = file_reader->metadata();
   ASSERT_EQ(1, metadata->num_row_groups());
   auto row_group_reader = file_reader->RowGroup(0);
@@ -1885,7 +1887,7 @@ TEST_F(ColumnWriterTestSizeEstimated, BufferedCompression) {
   EXPECT_GT(written_size, required_writer->total_compressed_bytes_written());
 }
 
-TEST(TestColumnWriter, WriteDataPageV2HeaderNullCount) {
+TEST_P(TestColumnWriter, WriteDataPageV2HeaderNullCount) {
   auto sink = CreateOutputStream();
   auto list_type = GroupNode::Make("list", Repetition::REPEATED,
                                    {schema::Int32("elem", Repetition::OPTIONAL)});
@@ -1930,8 +1932,7 @@ TEST(TestColumnWriter, WriteDataPageV2HeaderNullCount) {
 
   ASSERT_NO_THROW(file_writer->Close());
   ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
-  auto file_reader = ParquetFileReader::Open(
-      std::make_shared<::arrow::io::BufferReader>(buffer), default_reader_properties());
+  auto file_reader = MakeBufferReader(buffer, GetParam());
   auto metadata = file_reader->metadata();
   ASSERT_EQ(1, metadata->num_row_groups());
   auto row_group_reader = file_reader->RowGroup(0);
@@ -2084,6 +2085,8 @@ TEST_F(TestValuesWriterInt32Type, AvoidCompressedInDataPageV2) {
   }
 }
 #endif
+INSTANTIATE_TEST_SUITE_P(WriterTest, TestColumnWriter,
+                         ::testing::Values(0, 10, 42, 10000));
 
 // Test writing and reading geometry columns
 class TestGeometryValuesWriter : public TestPrimitiveWriter<ByteArrayType> {

@@ -889,5 +889,46 @@ std::shared_ptr<::arrow::DataType> geoarrow_wkb(
 std::shared_ptr<::arrow::DataType> geoarrow_wkb_lonlat(
     const std::shared_ptr<::arrow::DataType> storage = ::arrow::binary());
 
+// Utilities to use a cross product of two types in a gtest typed test, adapted from
+// https://stackoverflow.com/a/9145665/3793885
+namespace gtest_utils {
+
+// Simple type pair
+template <typename T1, typename T2>
+struct TypePair {
+  using DataType = T1;
+  using BufferTag = T2;
+};
+
+// Concatenation
+template <typename... T>
+struct Concat;
+template <typename... Ts, typename... Us>
+struct Concat<::testing::Types<Ts...>, ::testing::Types<Us...>> {
+  using type = ::testing::Types<Ts..., Us...>;
+};
+
+// Cross Product
+template <typename T, typename U>
+struct CrossProduct;
+
+// Partially specialise the empty case for the first type_list.
+template <typename... Us>
+struct CrossProduct<::testing::Types<>, ::testing::Types<Us...>> {
+  using type = ::testing::Types<>;
+};
+
+// The general case for two type_lists. Process:
+// 1. Expand out the head of the first type_list with the full second type_list.
+// 2. Recurse the tail of the first type_list.
+// 3. Concatenate the two type_lists.
+template <typename T, typename... Ts, typename... Us>
+struct CrossProduct<::testing::Types<T, Ts...>, ::testing::Types<Us...>> {
+  using type =
+      typename Concat<::testing::Types<TypePair<T, Us>...>,
+                      typename CrossProduct<::testing::Types<Ts...>,
+                                            ::testing::Types<Us...>>::type>::type;
+};
+}  // namespace gtest_utils
 }  // namespace test
 }  // namespace parquet

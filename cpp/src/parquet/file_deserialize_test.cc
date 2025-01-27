@@ -31,6 +31,7 @@
 #include "parquet/file_reader.h"
 #include "parquet/metadata.h"
 #include "parquet/platform.h"
+#include "parquet/test_corded_file.h"
 #include "parquet/test_util.h"
 #include "parquet/thrift_internal.h"
 #include "parquet/types.h"
@@ -952,29 +953,39 @@ INSTANTIATE_TEST_SUITE_P(PageReader, TestPageSerde,
 // ----------------------------------------------------------------------
 // File structure tests
 
-class TestParquetFileReader : public ::testing::Test {
+// Param is the slice size for Firebolt's corded buffers, 0 = disabled
+class TestParquetFileReader : public ::testing::TestWithParam<int64_t> {
  public:
   void AssertInvalidFileThrows(const std::shared_ptr<Buffer>& buffer) {
     reader_.reset(new ParquetFileReader());
 
-    auto reader = std::make_shared<BufferReader>(buffer);
+    auto slice_size = GetParam();
+    std::shared_ptr<::arrow::io::RandomAccessFile> source;
 
-    ASSERT_THROW(reader_->Open(ParquetFileReader::Contents::Open(reader)),
-                 ParquetException);
+    ReaderProperties properties;
+    if (slice_size == 0) {
+      source = std::make_shared<BufferReader>(buffer);
+    } else {
+      source = std::make_shared<SimpleCordedRandomAccessFile>(buffer, slice_size);
+      properties.use_firebolt_corded_buffers();
+      properties.disable_buffered_stream();
+    }
+
+    ASSERT_THROW(reader_->Open(source, properties), ParquetException);
   }
 
  protected:
   std::unique_ptr<ParquetFileReader> reader_;
 };
 
-TEST_F(TestParquetFileReader, InvalidHeader) {
+TEST_P(TestParquetFileReader, InvalidHeader) {
   const char* bad_header = "PAR2";
 
   auto buffer = Buffer::Wrap(bad_header, strlen(bad_header));
   ASSERT_NO_FATAL_FAILURE(AssertInvalidFileThrows(buffer));
 }
 
-TEST_F(TestParquetFileReader, InvalidFooter) {
+TEST_P(TestParquetFileReader, InvalidFooter) {
   // File is smaller than FOOTER_SIZE
   const char* bad_file = "PAR1PAR";
   auto buffer = Buffer::Wrap(bad_file, strlen(bad_file));
@@ -986,7 +997,7 @@ TEST_F(TestParquetFileReader, InvalidFooter) {
   ASSERT_NO_FATAL_FAILURE(AssertInvalidFileThrows(buffer));
 }
 
-TEST_F(TestParquetFileReader, IncompleteMetadata) {
+TEST_P(TestParquetFileReader, IncompleteMetadata) {
   auto stream = CreateOutputStream();
 
   const char* magic = "PAR1";
@@ -1002,5 +1013,11 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
   ASSERT_OK_AND_ASSIGN(auto buffer, stream->Finish());
   ASSERT_NO_FATAL_FAILURE(AssertInvalidFileThrows(buffer));
 }
+
+INSTANTIATE_TEST_SUITE_P(FileReader, TestParquetFileReader,
+                         ::testing::Values(     //
+                             0,                 // disable corded buffers
+                             4, 10, 100, 10000  // various slice sizes
+                             ));
 
 }  // namespace parquet

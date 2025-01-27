@@ -26,6 +26,7 @@
 #include "parquet/file_reader.h"
 #include "parquet/file_writer.h"
 #include "parquet/platform.h"
+#include "parquet/test_corded_file.h"
 #include "parquet/test_util.h"
 #include "parquet/types.h"
 
@@ -38,8 +39,24 @@ using ::testing::ElementsAre;
 
 namespace test {
 
-template <typename TestType>
-class TestSerialize : public PrimitiveTypedTest<TestType> {
+struct ContiguousBufferTag {
+  static constexpr int64_t slice_size = 0;
+};
+struct CordedBuffer10BTag {
+  static constexpr int64_t slice_size = 10;
+};
+struct CordedBuffer42BTag {
+  static constexpr int64_t slice_size = 42;
+};
+struct CordedBuffer10kBTag {
+  static constexpr int64_t slice_size = 10000;
+};
+
+template <typename TestConfig>
+class TestSerialize : public PrimitiveTypedTest<typename TestConfig::DataType> {
+  using TestType = typename TestConfig::DataType;
+  static constexpr int64_t slice_size = TestConfig::BufferTag::slice_size;
+
  public:
   void SetUp() {
     num_columns_ = 4;
@@ -130,8 +147,7 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
 
     int num_rows_ = num_rowgroups_ * rows_per_rowgroup_;
 
-    auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-    auto file_reader = ParquetFileReader::Open(source);
+    auto file_reader = MakeBufferReader(buffer, slice_size);
     ASSERT_EQ(num_columns_, file_reader->metadata()->num_columns());
     ASSERT_EQ(num_rowgroups_, file_reader->metadata()->num_row_groups());
     ASSERT_EQ(num_rows_, file_reader->metadata()->num_rows());
@@ -297,9 +313,13 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
   }
 };
 
-typedef ::testing::Types<Int32Type, Int64Type, Int96Type, FloatType, DoubleType,
-                         BooleanType, ByteArrayType, FLBAType>
-    TestTypes;
+using DataTypes = ::testing::Types<Int32Type, Int64Type, Int96Type, FloatType, DoubleType,
+                                   BooleanType, ByteArrayType, FLBAType>;
+
+using BufferTypes = ::testing::Types<ContiguousBufferTag, CordedBuffer10BTag,
+                                     CordedBuffer42BTag, CordedBuffer10kBTag>;
+
+using TestTypes = gtest_utils::CrossProduct<DataTypes, BufferTypes>::type;
 
 TYPED_TEST_SUITE(TestSerialize, TestTypes);
 

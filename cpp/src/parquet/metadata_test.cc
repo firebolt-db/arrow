@@ -17,13 +17,16 @@
 
 #include "parquet/metadata.h"
 
+#include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 
 #include "arrow/util/key_value_metadata.h"
 #include "parquet/file_reader.h"
 #include "parquet/file_writer.h"
+#include "parquet/properties.h"
 #include "parquet/schema.h"
 #include "parquet/statistics.h"
+#include "parquet/test_corded_file.h"
 #include "parquet/test_util.h"
 #include "parquet/thrift_internal.h"
 #include "parquet/types.h"
@@ -328,7 +331,10 @@ TEST(Metadata, TestKeyValueMetadata) {
   EXPECT_TRUE(f_accessor->key_value_metadata()->Equals(*kvmeta));
 }
 
-TEST(Metadata, TestAddKeyValueMetadata) {
+class ParamTest : public ::testing::TestWithParam<int64_t /* slice_size */> {};
+using MetadataTest = ParamTest;
+
+TEST_P(MetadataTest, TestAddKeyValueMetadata) {
   schema::NodeVector fields;
   fields.push_back(schema::Int32("int_col", Repetition::REQUIRED));
   auto schema = std::static_pointer_cast<schema::GroupNode>(
@@ -357,8 +363,7 @@ TEST(Metadata, TestAddKeyValueMetadata) {
   EXPECT_THROW(file_writer->AddKeyValueMetadata(kv_meta_ignored), ParquetException);
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
+  auto file_reader = MakeBufferReader(buffer, GetParam());
 
   ASSERT_NE(nullptr, file_reader->metadata());
   ASSERT_NE(nullptr, file_reader->metadata()->key_value_metadata());
@@ -374,10 +379,10 @@ TEST(Metadata, TestAddKeyValueMetadata) {
   EXPECT_FALSE(read_kv_meta->Contains("test_key_4"));
 }
 
-TEST(Metadata, TestHasBloomFilter) {
+TEST_P(MetadataTest, TestHasBloomFilter) {
   std::string dir_string(parquet::test::get_data_dir());
   std::string path = dir_string + "/data_index_bloom_encoding_stats.parquet";
-  auto reader = ParquetFileReader::OpenFile(path, false);
+  auto reader = OpenFileReader(path, GetParam(), false);
   auto file_metadata = reader->metadata();
   ASSERT_EQ(1, file_metadata->num_row_groups());
   auto row_group_metadata = file_metadata->RowGroup(0);
@@ -388,10 +393,10 @@ TEST(Metadata, TestHasBloomFilter) {
   ASSERT_EQ(192, bloom_filter_offset);
 }
 
-TEST(Metadata, TestReadPageIndex) {
+TEST_P(MetadataTest, TestReadPageIndex) {
   std::string dir_string(parquet::test::get_data_dir());
   std::string path = dir_string + "/alltypes_tiny_pages.parquet";
-  auto reader = ParquetFileReader::OpenFile(path, false);
+  auto reader = OpenFileReader(path, GetParam(), false);
   auto file_metadata = reader->metadata();
   ASSERT_EQ(1, file_metadata->num_row_groups());
   auto row_group_metadata = file_metadata->RowGroup(0);
@@ -427,7 +432,7 @@ TEST(Metadata, TestReadPageIndex) {
   }
 }
 
-TEST(Metadata, TestSortingColumns) {
+TEST_P(MetadataTest, TestSortingColumns) {
   schema::NodeVector fields;
   fields.push_back(schema::Int32("sort_col", Repetition::REQUIRED));
   fields.push_back(schema::Int32("int_col", Repetition::REQUIRED));
@@ -459,8 +464,7 @@ TEST(Metadata, TestSortingColumns) {
   file_writer->Close();
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
+  auto file_reader = MakeBufferReader(buffer, GetParam());
 
   ASSERT_NE(nullptr, file_reader->metadata());
   ASSERT_EQ(1, file_reader->metadata()->num_row_groups());
@@ -469,6 +473,8 @@ TEST(Metadata, TestSortingColumns) {
   ASSERT_NE(nullptr, row_group_read_metadata);
   EXPECT_EQ(sorting_columns, row_group_read_metadata->sorting_columns());
 }
+
+INSTANTIATE_TEST_SUITE_P(MetadataTest, MetadataTest, ::testing::Values(0, 10, 42, 10000));
 
 TEST(ApplicationVersion, Basics) {
   ApplicationVersion version("parquet-mr version 1.7.9");
