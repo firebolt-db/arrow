@@ -14,7 +14,7 @@ class CordedBuffer {
   /// The lengths of the slices may differ.
   using Slice = std::span<const std::byte>;
 
-  explicit CordedBuffer(std::span<Slice> slices, int32_t slice_idx = 0,
+  explicit CordedBuffer(std::span<const Slice> slices, int32_t slice_idx = 0,
                         int32_t slice_offset = 0)
       : slices_(slices), slice_idx_(slice_idx), slice_offset_(slice_offset) {}
 
@@ -64,7 +64,7 @@ class CordedBuffer {
 
  private:
   // The slices
-  std::span<Slice> slices_;
+  std::span<const Slice> slices_;
   // Current buffer position, encoded as slice index and offset within that slice
   int32_t slice_idx_;
   int32_t slice_offset_;
