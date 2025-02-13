@@ -477,8 +477,9 @@ class SerializedFile : public ParquetFileReader::Contents {
       // Happy path: entire read is in a single place, no copy needed
       if (corded_buffer.num_slices() == 1) {
         const auto& slice = corded_buffer.slice(0);
-        return std::make_shared<Buffer>(reinterpret_cast<const uint8_t*>(slice.data()),
-                                        slice.size());
+        return std::make_shared<Buffer>(
+            reinterpret_cast<const uint8_t*>(slice.data() + corded_buffer.slice_offset()),
+            length);
       }
 
       PARQUET_ASSIGN_OR_THROW(auto buffer, ::arrow::AllocateBuffer(length));
