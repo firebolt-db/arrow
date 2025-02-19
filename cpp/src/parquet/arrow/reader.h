@@ -136,6 +136,11 @@ class PARQUET_EXPORT FileReader {
   // The indicated column index is relative to the schema
   virtual ::arrow::Status GetColumn(int i, std::unique_ptr<ColumnReader>* out) = 0;
 
+  // Firebolt addition: get a ColumnReader for a single row group.
+  // Column index is like for GetRecordBatchReader, *not* like for GetColumn
+  virtual ::arrow::Status GetColumnReader(int column_index, int row_group_index,
+                                          std::unique_ptr<ColumnReader>* out) = 0;
+
   /// \brief Return arrow schema for all the columns.
   virtual ::arrow::Status GetSchema(std::shared_ptr<::arrow::Schema>* out) = 0;
 

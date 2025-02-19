@@ -255,6 +255,23 @@ class FileReaderImpl : public FileReader {
     return GetColumn(i, AllRowGroupsFactory(), out);
   }
 
+  Status GetColumnReader(int column_index, int row_group_index,
+                         std::unique_ptr<ColumnReader>* out) override {
+    // Find fields to read
+    ARROW_ASSIGN_OR_RAISE(std::vector<int> field_indices,
+                          manifest_.GetFieldIndices({column_index}));
+    if (field_indices.size() != 1) {
+      return Status::NotImplemented("GetColumnReader for composite column");
+    }
+    auto leaves = VectorToSharedSet({column_index});
+
+    std::unique_ptr<ColumnReaderImpl> reader;
+    RETURN_NOT_OK(GetFieldReader(field_indices[0], leaves, {row_group_index}, &reader));
+    ::arrow::FieldVector out_fields = {reader->field()};
+    *out = std::move(reader);
+    return Status::OK();
+  }
+
   Status GetSchema(std::shared_ptr<::arrow::Schema>* out) override {
     return FromParquetSchema(reader_->metadata()->schema(), reader_properties_,
                              reader_->metadata()->key_value_metadata(), out);
