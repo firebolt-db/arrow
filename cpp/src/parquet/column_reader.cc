@@ -265,7 +265,8 @@ class SerializedPageReader : public PageReader {
 
   std::shared_ptr<Buffer> DecompressIfNeeded(PlainOrCordedBuffer page_buffer,
                                              int compressed_len, int uncompressed_len,
-                                             int levels_byte_len = 0);
+                                             int levels_byte_len = 0,
+                                             bool is_uncompressed_corded_buffer = false);
 
   // Returns true for non-data pages, and if we should skip based on
   // data_page_filter_. Performs basic checks on values in the page header.
@@ -590,8 +591,9 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
       // DecompressIfNeeded doesn't take `is_compressed` into account as
       // it's page type-agnostic.  Corded buffers always need to be decompressed.
       if (is_compressed || properties_.firebolt_corded_buffers()) {
-        page_buffer = DecompressIfNeeded(std::move(page_buffer), compressed_len,
-                                         uncompressed_len, levels_byte_len);
+        page_buffer =
+            DecompressIfNeeded(std::move(page_buffer), compressed_len, uncompressed_len,
+                               levels_byte_len, !is_compressed);
       }
       ARROW_DCHECK(std::holds_alternative<std::shared_ptr<Buffer>>(page_buffer));
 
@@ -608,9 +610,12 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
   return std::shared_ptr<Page>(nullptr);
 }
 
+// is_uncompressed_corded_buffer is there to do a memcpy from a corded to a non-corded
+// buffer for uncompressed pages, this is sadly required when using Firebolt's corded
+// buffers.
 std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
     PlainOrCordedBuffer page_buffer, int compressed_len, int uncompressed_len,
-    int levels_byte_len) {
+    int levels_byte_len, bool is_uncompressed_corded_buffer) {
   // Sanity check: correct buffer type passed
   std::shared_ptr<Buffer> plain_buffer;
   std::optional<CordedBuffer> corded_buffer;
@@ -662,22 +667,26 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
   int64_t decompressed_len = 0;
   if (uncompressed_len - levels_byte_len != 0) {
     // Decompress the values
-    if (properties_.firebolt_corded_buffers()) {
+    auto* dest = decompression_buffer_->mutable_data() + levels_byte_len;
+    const int64_t bytes_to_decompress = compressed_len - levels_byte_len;
+    const int64_t expected_decompressed_len = uncompressed_len - levels_byte_len;
+
+    if (is_uncompressed_corded_buffer && corded_buffer.has_value()) {
+      decompressed_len =
+          ::arrow::util::MemcpyFromCorded(dest, *corded_buffer, bytes_to_decompress);
+    } else if (properties_.firebolt_corded_buffers()) {
       auto* corded_decompressor = dynamic_cast<CordedCodec*>(decompressor_.get());
       if (corded_decompressor == nullptr)
         throw ParquetException("Firebolt corded buffers enabled, expected corded codec");
-      PARQUET_ASSIGN_OR_THROW(
-          decompressed_len, corded_decompressor->DecompressCorded(
-                                compressed_len - levels_byte_len, *corded_buffer,
-                                uncompressed_len - levels_byte_len,
-                                decompression_buffer_->mutable_data() + levels_byte_len));
+      PARQUET_ASSIGN_OR_THROW(decompressed_len, corded_decompressor->DecompressCorded(
+                                                    bytes_to_decompress, *corded_buffer,
+                                                    expected_decompressed_len, dest));
     } else {
       PARQUET_ASSIGN_OR_THROW(
-          decompressed_len, decompressor_->Decompress(
-                                compressed_len - levels_byte_len,
-                                std::get<0>(page_buffer)->data() + levels_byte_len,
-                                uncompressed_len - levels_byte_len,
-                                decompression_buffer_->mutable_data() + levels_byte_len));
+          decompressed_len,
+          decompressor_->Decompress(bytes_to_decompress,
+                                    std::get<0>(page_buffer)->data() + levels_byte_len,
+                                    expected_decompressed_len, dest));
     }
   }
   if (decompressed_len != uncompressed_len - levels_byte_len) {
