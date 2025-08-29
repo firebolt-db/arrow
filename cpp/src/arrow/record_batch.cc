@@ -101,6 +101,8 @@ class SimpleRecordBatch : public RecordBatch {
   }
 
   std::shared_ptr<Array> column(int i) const override {
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     std::shared_ptr<Array> result = std::atomic_load(&boxed_columns_[i]);
     if (!result) {
       auto new_array = MakeArray(columns_[i]);
@@ -111,6 +113,7 @@ class SimpleRecordBatch : public RecordBatch {
         return new_array;
       }
     }
+    #pragma GCC diagnostic pop
     return result;
   }
 

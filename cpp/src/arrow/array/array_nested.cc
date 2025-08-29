@@ -1077,7 +1077,10 @@ const ArrayVector& StructArray::fields() const {
 }
 
 const std::shared_ptr<Array>& StructArray::field(int i) const {
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   std::shared_ptr<Array> result = std::atomic_load(&boxed_fields_[i]);
+  #pragma GCC diagnostic pop
   if (!result) {
     std::shared_ptr<ArrayData> field_data;
     if (data_->offset != 0 || data_->child_data[i]->length != data_->length) {
@@ -1085,8 +1088,11 @@ const std::shared_ptr<Array>& StructArray::field(int i) const {
     } else {
       field_data = data_->child_data[i];
     }
-    result = MakeArray(field_data);
+    std::shared_ptr<Array> result = MakeArray(field_data);
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     std::atomic_store(&boxed_fields_[i], std::move(result));
+    #pragma GCC diagnostic pop
     return boxed_fields_[i];
   }
   return boxed_fields_[i];
@@ -1357,7 +1363,10 @@ std::shared_ptr<Array> UnionArray::field(int i) const {
       static_cast<decltype(boxed_fields_)::size_type>(i) >= boxed_fields_.size()) {
     return nullptr;
   }
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   std::shared_ptr<Array> result = std::atomic_load(&boxed_fields_[i]);
+  #pragma GCC diagnostic pop
   if (!result) {
     std::shared_ptr<ArrayData> child_data = data_->child_data[i]->Copy();
     if (mode() == UnionMode::SPARSE) {
@@ -1369,7 +1378,10 @@ std::shared_ptr<Array> UnionArray::field(int i) const {
       }
     }
     result = MakeArray(child_data);
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     std::atomic_store(&boxed_fields_[i], result);
+    #pragma GCC diagnostic pop
   }
   return result;
 }

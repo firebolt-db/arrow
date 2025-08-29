@@ -1220,7 +1220,10 @@ class RegionResolver {
   }
 
   static Result<std::shared_ptr<RegionResolver>> DefaultInstance() {
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     auto resolver = std::atomic_load(&instance_);
+    #pragma GCC diagnostic pop
     if (resolver) {
       return resolver;
     }
@@ -1239,7 +1242,10 @@ class RegionResolver {
   }
 
   static void ResetDefaultInstance() {
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     std::atomic_store(&instance_, std::shared_ptr<RegionResolver>());
+    #pragma GCC diagnostic pop
   }
 
   Result<std::string> ResolveRegion(const std::string& bucket) {

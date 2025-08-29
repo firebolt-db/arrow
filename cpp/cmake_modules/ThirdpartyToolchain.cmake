@@ -2276,21 +2276,25 @@ if(ARROW_MIMALLOC)
   # We only use a vendored mimalloc as we want to control its build options.
 
   set(MIMALLOC_LIB_BASE_NAME "mimalloc")
-  if(WIN32)
-    set(MIMALLOC_LIB_BASE_NAME "${MIMALLOC_LIB_BASE_NAME}-static")
-  endif()
   if(${UPPERCASE_BUILD_TYPE} STREQUAL "DEBUG")
     set(MIMALLOC_LIB_BASE_NAME "${MIMALLOC_LIB_BASE_NAME}-${LOWERCASE_BUILD_TYPE}")
   endif()
 
   set(MIMALLOC_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/mimalloc_ep/src/mimalloc_ep")
-  set(MIMALLOC_INCLUDE_DIR "${MIMALLOC_PREFIX}/include/mimalloc-2.0")
+  set(MIMALLOC_INCLUDE_DIR "${MIMALLOC_PREFIX}/include/mimalloc-2.2")
   set(MIMALLOC_STATIC_LIB
-      "${MIMALLOC_PREFIX}/lib/mimalloc-2.0/${CMAKE_STATIC_LIBRARY_PREFIX}${MIMALLOC_LIB_BASE_NAME}${CMAKE_STATIC_LIBRARY_SUFFIX}"
+      "${MIMALLOC_PREFIX}/lib/mimalloc-2.2/${CMAKE_STATIC_LIBRARY_PREFIX}${MIMALLOC_LIB_BASE_NAME}${CMAKE_STATIC_LIBRARY_SUFFIX}"
   )
+
+  set(MIMALLOC_C_FLAGS ${EP_C_FLAGS})
+  if(MINGW)
+    # Workaround https://github.com/microsoft/mimalloc/issues/910 on RTools40
+    set(MIMALLOC_C_FLAGS "${MIMALLOC_C_FLAGS} -DERROR_COMMITMENT_MINIMUM=635")
+  endif()
 
   set(MIMALLOC_CMAKE_ARGS
       ${EP_COMMON_CMAKE_ARGS}
+      "-DCMAKE_C_FLAGS=${MIMALLOC_C_FLAGS}"
       "-DCMAKE_INSTALL_PREFIX=${MIMALLOC_PREFIX}"
       -DMI_OVERRIDE=OFF
       -DMI_LOCAL_DYNAMIC_TLS=ON
@@ -4319,6 +4323,10 @@ macro(build_nlohmann_json)
       ${EP_COMMON_CMAKE_ARGS} "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
       # google-cloud-cpp requires JSON_MultipleHeaders=ON
       -DJSON_BuildTests=OFF -DJSON_MultipleHeaders=ON)
+
+  # We can remove this once we remove -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  # from EP_COMMON_CMAKE_ARGS.
+  list(REMOVE_ITEM NLOHMANN_JSON_CMAKE_ARGS -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 
   set(NLOHMANN_JSON_BUILD_BYPRODUCTS ${NLOHMANN_JSON_PREFIX}/include/nlohmann/json.hpp)
 
