@@ -259,7 +259,19 @@ class ArrayLoader {
       // (zero-sized buffer allocations are cheap)
       return AllocateBuffer(0).Value(out);
     } else {
-      return ReadBuffer(buffer->offset(), buffer->length(), out);
+      ARROW_RETURN_NOT_OK(ReadBuffer(buffer->offset(), buffer->length(), out));
+
+      // Sometimes ReadBuffer might return a Splice() of the raw socket buffer, which might be unaligned with the type it actually holds.
+      // This causes errors in UBsan and also might cause SIGSEGV in old compilers even on x86.
+      // To prevent this, we create 64-byte aligned copy of the buffer if it is not 8-byte aligned.
+      if ((*out) && !bit_util::IsMultipleOf8(reinterpret_cast<int64_t>((*out)->data()))) {
+        std::shared_ptr<Buffer> aligned_buffer;
+        ARROW_RETURN_NOT_OK(AllocateBuffer(buffer->length()).Value(&aligned_buffer));
+        memcpy(aligned_buffer->mutable_data(), (*out)->data(), static_cast<size_t>(buffer->length()));
+        *out = std::move(aligned_buffer);
+      }
+
+      return Status::OK();
     }
   }
 
