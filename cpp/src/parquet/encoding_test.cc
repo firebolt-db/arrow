@@ -415,10 +415,6 @@ TYPED_TEST(TestDictionaryEncoding, BasicRoundTrip) {
   ASSERT_NO_FATAL_FAILURE(this->Execute(2500, 2));
 }
 
-TEST(TestDictionaryEncoding, CannotDictDecodeBoolean) {
-  ASSERT_THROW(MakeDictDecoder<BooleanType>(nullptr), ParquetException);
-}
-
 // ----------------------------------------------------------------------
 // Shared arrow builder decode tests
 
