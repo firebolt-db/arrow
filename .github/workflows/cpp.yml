@@ -89,15 +89,8 @@ jobs:
             image: ubuntu-cpp-sanitizer
             llvm: 18
             runs-on: ubuntu-latest
-            title: AMD64 Ubuntu 22.04 C++ ASAN UBSAN
-            ubuntu: 22.04
-          - arch: arm64v8
-            clang-tools: 18
-            image: ubuntu-cpp
-            llvm: 18
-            runs-on: ubuntu-24.04-arm
-            title: ARM64 Ubuntu 22.04 C++
-            ubuntu: 22.04
+            title: AMD64 Ubuntu 24.04 C++ ASAN UBSAN
+            ubuntu: 24.04
     env:
       ARCH: ${{ matrix.arch }}
       ARROW_SIMD_LEVEL: ${{ matrix.simd-level }}
