@@ -206,6 +206,7 @@ takes precedence over ccache if a storage backend is configured" ON)
 
   define_option(ARROW_ENABLE_THREADING "Enable threading in Arrow core" ON)
 
+  define_option(ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR "Enable concurrent serial executor" ON)
   #----------------------------------------------------------------------
   set_option_category("Tests and benchmarks")
 

@@ -50,6 +50,7 @@
 
 #cmakedefine ARROW_AZURE
 #cmakedefine ARROW_ENABLE_THREADING
+#cmakedefine ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 #cmakedefine ARROW_GCS
 #cmakedefine ARROW_HDFS
 #cmakedefine ARROW_S3

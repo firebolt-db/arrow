@@ -79,13 +79,13 @@ struct SerialExecutor::State {
   std::thread::id current_thread;
   bool paused{false};
   bool finished{false};
-#ifndef ARROW_ENABLE_THREADING
+#ifndef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
   int max_tasks_running{1};
   int tasks_running{0};
 #endif
 };
 
-#ifndef ARROW_ENABLE_THREADING
+#ifndef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 // list of all SerialExecutor objects - as we need to run tasks from all pools at once in
 // Run()
 struct SerialExecutorGlobalState {
@@ -116,14 +116,14 @@ bool SerialExecutor::IsCurrentExecutor() { return GetCurrentExecutor() == this; 
 #endif
 
 SerialExecutor::SerialExecutor() : state_(std::make_shared<State>()) {
-#ifndef ARROW_ENABLE_THREADING
+#ifndef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
   GetSerialExecutorGlobalState()->all_executors.insert(this);
   state_->max_tasks_running = 1;
 #endif
 }
 
 SerialExecutor::~SerialExecutor() {
-#ifndef ARROW_ENABLE_THREADING
+#ifndef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
   GetSerialExecutorGlobalState()->all_executors.erase(this);
 #endif
   auto state = state_;
@@ -143,7 +143,7 @@ int SerialExecutor::GetNumTasks() {
   return static_cast<int>(state_->task_queue.size());
 }
 
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 Status SerialExecutor::SpawnReal(TaskHints hints, FnOnce<void()> task,
                                  StopToken stop_token, StopCallback&& stop_callback) {
 #  ifdef ARROW_WITH_OPENTELEMETRY
@@ -189,7 +189,7 @@ void SerialExecutor::Finish() {
   state->wait_for_tasks.notify_one();
 }
 
-#else  // ARROW_ENABLE_THREADING
+#else  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 Status SerialExecutor::SpawnReal(TaskHints hints, FnOnce<void()> task,
                                  StopToken stop_token, StopCallback&& stop_callback) {
 #  ifdef ARROW_WITH_OPENTELEMETRY
@@ -224,7 +224,7 @@ void SerialExecutor::Finish() {
   RunLoop();
 }
 
-#endif  // ARROW_ENABLE_THREADING
+#endif  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 void SerialExecutor::Pause() {
   // Same comment as SpawnReal above
   auto state = state_;
@@ -252,7 +252,7 @@ bool SerialExecutor::OwnsThisThread() {
   std::lock_guard lk(state_->mutex);
   return std::this_thread::get_id() == state_->current_thread;
 }
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 
 void SerialExecutor::RunLoop() {
   // This is called from the SerialExecutor's main thread, so the
@@ -289,7 +289,7 @@ void SerialExecutor::RunLoop() {
   }
   state_->current_thread = {};
 }
-#else   // ARROW_ENABLE_THREADING
+#else   // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 bool SerialExecutor::RunTasksOnAllExecutors() {
   auto globalState = GetSerialExecutorGlobalState();
   // if the previously called executor was deleted, ignore last_called_executor
@@ -390,9 +390,9 @@ void SerialExecutor::RunLoop() {
     RunTasksOnAllExecutors();
   }
 }
-#endif  // ARROW_ENABLE_THREADING
+#endif  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 
 struct ThreadPool::State {
   State() = default;
@@ -753,7 +753,7 @@ int ThreadPool::DefaultCapacity() {
   return capacity;
 }
 
-#else  // ARROW_ENABLE_THREADING
+#else  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 ThreadPool::ThreadPool() {
   // default to max 'concurrency' of 8
   // if threading is disabled
@@ -812,7 +812,7 @@ ThreadPool::~ThreadPool() {
   std::swap(state_->task_queue, empty);
 }
 
-#endif  // ARROW_ENABLE_THREADING
+#endif  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 
 // Helper for the singleton pattern
 std::shared_ptr<ThreadPool> ThreadPool::MakeCpuThreadPool() {

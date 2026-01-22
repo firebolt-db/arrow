@@ -357,7 +357,7 @@ class ARROW_EXPORT SerialExecutor : public Executor {
           // the next call.
           executor->Pause();
         });
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
         // future must run on this thread
         // Borrow this thread and run tasks until the future is finished
         executor->RunLoop();
@@ -382,7 +382,7 @@ class ARROW_EXPORT SerialExecutor : public Executor {
     return Iterator<T>(SerialIterator{std::move(serial_executor), std::move(generator)});
   }
 
-#ifndef ARROW_ENABLE_THREADING
+#ifndef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
   // run a pending task from loop
   // returns true if any tasks were run in the last go round the loop (i.e. if it
   // returns false, all executors are waiting)
@@ -421,7 +421,7 @@ class ARROW_EXPORT SerialExecutor : public Executor {
     return final_fut;
   }
 
-#ifndef ARROW_ENABLE_THREADING
+#ifndef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
   // we have to run tasks from all live executors
   // during RunLoop if we don't have threading
   static std::unordered_set<SerialExecutor*> all_executors;
@@ -432,10 +432,10 @@ class ARROW_EXPORT SerialExecutor : public Executor {
   // without threading we can't tell which executor called the
   // current process - so we set it in spawning the task
   static SerialExecutor* current_executor;
-#endif  // ARROW_ENABLE_THREADING
+#endif  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 };
 
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 
 /// An Executor implementation spawning tasks in FIFO manner on a fixed-size
 /// pool of worker threads.
@@ -517,7 +517,7 @@ class ARROW_EXPORT ThreadPool : public Executor {
   State* state_;
   bool shutdown_on_destroy_;
 };
-#else  // ARROW_ENABLE_THREADING
+#else  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 // an executor implementation which pretends to be a thread pool but runs everything
 // on the main thread using a static queue (shared between all thread pools, otherwise
 // cross-threadpool dependencies will break everything)
@@ -568,7 +568,7 @@ class ARROW_EXPORT ThreadPool : public SerialExecutor {
   ThreadPool();
 };
 
-#endif  // ARROW_ENABLE_THREADING
+#endif  // ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
 
 // Return the process-global thread pool for CPU-bound tasks.
 ARROW_EXPORT ThreadPool* GetCpuThreadPool();
