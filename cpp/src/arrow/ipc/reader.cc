@@ -205,6 +205,17 @@ class ArrayLoader {
     if (!read_end.has_value() || (file_length_.has_value() && read_end > file_length_)) {
       return Status::Invalid("Buffer ", buffer_index_, " exceeds IPC file area");
     }
+    // FIR-47668: v24's check above only bounds the non-file path (file_length_ is
+    // unset on the file_ path, so it catches overflow only).  Bound the file_ path
+    // against the actual size to avoid oversized allocations in file_->ReadAt.
+    if (file_) {
+      ARROW_ASSIGN_OR_RAISE(int64_t file_size, file_->GetSize());
+      if (offset > file_size || length > file_size - offset) {
+        return Status::Invalid("Buffer ", buffer_index_,
+                               " is out of bounds: offset ", offset, ", length ", length,
+                               ", file size ", file_size);
+      }
+    }
     if (!bit_util::IsMultipleOf8(offset)) {
       return Status::Invalid("Buffer ", buffer_index_,
                              " did not start on 8-byte aligned offset: ", offset);
