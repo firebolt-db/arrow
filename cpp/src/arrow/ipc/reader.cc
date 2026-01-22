@@ -175,11 +175,12 @@ class ArrayLoader {
 
   explicit ArrayLoader(const flatbuf::RecordBatch* metadata,
                        MetadataVersion metadata_version, const IpcReadOptions& options,
-                       int64_t file_offset)
+                       int64_t file_offset, int64_t body_length)
       : metadata_(metadata),
         metadata_version_(metadata_version),
         file_(nullptr),
         file_offset_(file_offset),
+        body_length_(body_length),
         max_recursion_depth_(options.max_recursion_depth) {}
 
   Status ReadBuffer(int64_t offset, int64_t length, std::shared_ptr<Buffer>* out) {
@@ -191,6 +192,19 @@ class ArrayLoader {
     }
     if (length < 0) {
       return Status::Invalid("Negative length for reading buffer ", buffer_index_);
+    }
+    int64_t body_length = -1;
+    if (file_) {
+      ARROW_ASSIGN_OR_RAISE(body_length, file_->GetSize());
+    } else {
+      body_length = body_length_;
+      if (body_length < 0) {
+        return Status::Invalid("Unknown body length when reading buffer ", buffer_index_);
+      }
+    }
+    if (offset > body_length || length > body_length - offset) {
+      return Status::Invalid("Buffer ", buffer_index_, " is out of bounds: offset ", offset,
+                             ", length ", length, ", body length ", body_length);
     }
     // This construct permits overriding GetBuffer at compile time
     if (!bit_util::IsMultipleOf8(offset)) {
@@ -507,6 +521,7 @@ class ArrayLoader {
   const MetadataVersion metadata_version_;
   io::RandomAccessFile* file_;
   int64_t file_offset_;
+  int64_t body_length_ = -1;
   int max_recursion_depth_;
   int buffer_index_ = 0;
   int field_index_ = 0;
@@ -1673,12 +1688,13 @@ class RecordBatchFileReaderImpl : public RecordBatchFileReader {
                                  const flatbuf::RecordBatch* batch,
                                  IpcReadContext context, io::RandomAccessFile* file,
                                  std::shared_ptr<io::RandomAccessFile> owned_file,
-                                 int64_t block_data_offset)
+                                 int64_t block_data_offset, int64_t block_body_length)
         : schema(std::move(sch)),
           context(std::move(context)),
           file(file),
           owned_file(std::move(owned_file)),
-          loader(batch, context.metadata_version, context.options, block_data_offset),
+          loader(batch, context.metadata_version, context.options, block_data_offset,
+                 block_body_length),
           columns(schema->num_fields()),
           cache(file, file->io_context(), io::CacheOptions::LazyDefaults()),
           length(batch->length()) {}
@@ -1784,7 +1800,7 @@ class RecordBatchFileReaderImpl : public RecordBatchFileReader {
 
           auto read_context = std::make_shared<CachedRecordBatchReadContext>(
               schema_, batch, std::move(context), file_, owned_file_,
-              block.offset + static_cast<int64_t>(block.metadata_length));
+              block.offset + static_cast<int64_t>(block.metadata_length), block.body_length);
           RETURN_NOT_OK(read_context->CalculateLoadRequest());
           return read_context->ReadAsync().Then(
               [read_context] { return read_context->CreateRecordBatch(); });
@@ -2013,7 +2029,7 @@ Future<std::shared_ptr<Message>> WholeIpcFileRecordBatchGenerator::ReadBlock(
     const FileBlock& block) {
   if (cached_source_) {
     auto cached_source = cached_source_;
-    io::ReadRange range{block.offset, block.metadata_length + block.body_length};
+  io::ReadRange range{block.offset, block.metadata_length + block.body_length};
     auto pool = state_->options_.memory_pool;
     return cached_source->WaitFor({range}).Then(
         [cached_source, pool, range]() -> Result<std::shared_ptr<Message>> {
