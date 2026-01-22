@@ -129,7 +129,7 @@ class ThreadedTaskGroup : public TaskGroup {
   bool ok() const override { return ok_.load(); }
 
   Status Finish() override {
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
     std::unique_lock<std::mutex> lock(mutex_);
     if (!finished_) {
       cv_.wait(lock, [&]() { return nremaining_.load() == 0; });

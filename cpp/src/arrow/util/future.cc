@@ -150,7 +150,7 @@ class ConcreteFutureImpl : public FutureImpl {
   }
 
   void DoWait() {
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
     std::unique_lock<std::mutex> lock(mutex_);
 
     cv_.wait(lock, [this] { return IsFutureFinished(state_); });
@@ -173,7 +173,7 @@ class ConcreteFutureImpl : public FutureImpl {
   }
 
   bool DoWait(double seconds) {
-#ifdef ARROW_ENABLE_THREADING
+#ifdef ARROW_ENABLE_CONCURRENT_SERIAL_EXECUTOR
     std::unique_lock<std::mutex> lock(mutex_);
 
     cv_.wait_for(lock, std::chrono::duration<double>(seconds),
