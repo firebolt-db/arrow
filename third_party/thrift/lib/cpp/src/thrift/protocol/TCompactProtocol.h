@@ -20,7 +20,7 @@
 #ifndef _THRIFT_PROTOCOL_TCOMPACTPROTOCOL_H_
 #define _THRIFT_PROTOCOL_TCOMPACTPROTOCOL_H_ 1
 
-#include <thrift/protocol/TVirtualProtocol.h>
+#include <thrift/protocol/TProtocol.h>
 
 #include <stack>
 #include <memory>
@@ -33,7 +33,7 @@ namespace protocol {
  * C++ Implementation of the Compact Protocol as described in THRIFT-110
  */
 template <class Transport_>
-class TCompactProtocolT : public TVirtualProtocol<TCompactProtocolT<Transport_> > {
+class TCompactProtocolT {
 public:
   static const int8_t PROTOCOL_ID = (int8_t)0x82u;
   static const int8_t VERSION_N = 1;
@@ -75,8 +75,7 @@ protected:
 
 public:
   TCompactProtocolT(std::shared_ptr<Transport_> trans)
-    : TVirtualProtocol<TCompactProtocolT<Transport_> >(trans),
-      trans_(trans.get()),
+    : trans_(trans.get()),
       lastFieldId_(0),
       string_limit_(0),
       string_buf_(nullptr),
@@ -89,8 +88,7 @@ public:
   TCompactProtocolT(std::shared_ptr<Transport_> trans,
                     int32_t string_limit,
                     int32_t container_limit)
-    : TVirtualProtocol<TCompactProtocolT<Transport_> >(trans),
-      trans_(trans.get()),
+    : trans_(trans.get()),
       lastFieldId_(0),
       string_limit_(string_limit),
       string_buf_(nullptr),
@@ -100,7 +98,7 @@ public:
     boolValue_.hasBoolValue = false;
   }
 
-  ~TCompactProtocolT() override { free(string_buf_); }
+  ~TCompactProtocolT() { free(string_buf_); }
 
   /**
    * Writing functions
@@ -196,8 +194,13 @@ public:
   uint32_t readSetBegin(TType& elemType, uint32_t& size);
 
   uint32_t readBool(bool& value);
-  // Provide the default readBool() implementation for std::vector<bool>
-  using TVirtualProtocol<TCompactProtocolT<Transport_> >::readBool;
+
+  uint32_t readBool(std::vector<bool>::reference value) {
+    bool b = false;
+    uint32_t ret = readBool(b);
+    value = b;
+    return ret;
+  }
 
   uint32_t readByte(int8_t& byte);
 
@@ -212,6 +215,8 @@ public:
   uint32_t readString(std::string& str);
 
   uint32_t readBinary(std::string& str);
+
+  uint32_t skip(TType type) { return ::apache::thrift::protocol::skip(*this, type); }
 
   /*
    *These methods are here for the struct to call, but don't have any wire
@@ -238,43 +243,6 @@ protected:
   int32_t container_limit_;
 };
 
-typedef TCompactProtocolT<TTransport> TCompactProtocol;
-
-/**
- * Constructs compact protocol handlers
- */
-template <class Transport_>
-class TCompactProtocolFactoryT : public TProtocolFactory {
-public:
-  TCompactProtocolFactoryT() : string_limit_(0), container_limit_(0) {}
-
-  TCompactProtocolFactoryT(int32_t string_limit, int32_t container_limit)
-    : string_limit_(string_limit), container_limit_(container_limit) {}
-
-  ~TCompactProtocolFactoryT() override = default;
-
-  void setStringSizeLimit(int32_t string_limit) { string_limit_ = string_limit; }
-
-  void setContainerSizeLimit(int32_t container_limit) { container_limit_ = container_limit; }
-
-  std::shared_ptr<TProtocol> getProtocol(std::shared_ptr<TTransport> trans) override {
-    std::shared_ptr<Transport_> specific_trans = std::dynamic_pointer_cast<Transport_>(trans);
-    TProtocol* prot;
-    if (specific_trans) {
-      prot = new TCompactProtocolT<Transport_>(specific_trans, string_limit_, container_limit_);
-    } else {
-      prot = new TCompactProtocol(trans, string_limit_, container_limit_);
-    }
-
-    return std::shared_ptr<TProtocol>(prot);
-  }
-
-private:
-  int32_t string_limit_;
-  int32_t container_limit_;
-};
-
-typedef TCompactProtocolFactoryT<TTransport> TCompactProtocolFactory;
 }
 }
 } // apache::thrift::protocol

@@ -14,7 +14,6 @@ namespace parquet { namespace format {
 template <class Protocol_>
 uint32_t SizeStatistics::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -96,7 +95,6 @@ uint32_t SizeStatistics::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t SizeStatistics::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("SizeStatistics");
 
   if (this->__isset.unencoded_byte_array_data_bytes) {
@@ -138,7 +136,6 @@ uint32_t SizeStatistics::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t Statistics::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -236,7 +233,6 @@ uint32_t Statistics::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t Statistics::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("Statistics");
 
   if (this->__isset.max) {
@@ -287,7 +283,6 @@ uint32_t Statistics::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t StringType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -316,7 +311,6 @@ uint32_t StringType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t StringType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("StringType");
 
   xfer += oprot->writeFieldStop();
@@ -327,7 +321,6 @@ uint32_t StringType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t UUIDType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -356,7 +349,6 @@ uint32_t UUIDType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t UUIDType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("UUIDType");
 
   xfer += oprot->writeFieldStop();
@@ -367,7 +359,6 @@ uint32_t UUIDType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t MapType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -396,7 +387,6 @@ uint32_t MapType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t MapType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("MapType");
 
   xfer += oprot->writeFieldStop();
@@ -407,7 +397,6 @@ uint32_t MapType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t ListType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -436,7 +425,6 @@ uint32_t ListType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t ListType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("ListType");
 
   xfer += oprot->writeFieldStop();
@@ -447,7 +435,6 @@ uint32_t ListType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t EnumType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -476,7 +463,6 @@ uint32_t EnumType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t EnumType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("EnumType");
 
   xfer += oprot->writeFieldStop();
@@ -487,7 +473,6 @@ uint32_t EnumType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t DateType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -516,7 +501,6 @@ uint32_t DateType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t DateType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("DateType");
 
   xfer += oprot->writeFieldStop();
@@ -527,7 +511,6 @@ uint32_t DateType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t Float16Type::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -556,7 +539,6 @@ uint32_t Float16Type::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t Float16Type::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("Float16Type");
 
   xfer += oprot->writeFieldStop();
@@ -567,7 +549,6 @@ uint32_t Float16Type::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t NullType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -596,7 +577,6 @@ uint32_t NullType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t NullType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("NullType");
 
   xfer += oprot->writeFieldStop();
@@ -607,7 +587,6 @@ uint32_t NullType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t DecimalType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -663,7 +642,6 @@ uint32_t DecimalType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t DecimalType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("DecimalType");
 
   xfer += oprot->writeFieldBegin("scale", ::apache::thrift::protocol::T_I32, 1);
@@ -682,7 +660,6 @@ uint32_t DecimalType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t MilliSeconds::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -711,7 +688,6 @@ uint32_t MilliSeconds::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t MilliSeconds::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("MilliSeconds");
 
   xfer += oprot->writeFieldStop();
@@ -722,7 +698,6 @@ uint32_t MilliSeconds::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t MicroSeconds::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -751,7 +726,6 @@ uint32_t MicroSeconds::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t MicroSeconds::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("MicroSeconds");
 
   xfer += oprot->writeFieldStop();
@@ -762,7 +736,6 @@ uint32_t MicroSeconds::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t NanoSeconds::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -791,7 +764,6 @@ uint32_t NanoSeconds::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t NanoSeconds::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("NanoSeconds");
 
   xfer += oprot->writeFieldStop();
@@ -802,7 +774,6 @@ uint32_t NanoSeconds::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t TimeUnit::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -860,7 +831,6 @@ uint32_t TimeUnit::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t TimeUnit::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("TimeUnit");
 
   if (this->__isset.MILLIS) {
@@ -886,7 +856,6 @@ uint32_t TimeUnit::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t TimestampType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -942,7 +911,6 @@ uint32_t TimestampType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t TimestampType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("TimestampType");
 
   xfer += oprot->writeFieldBegin("isAdjustedToUTC", ::apache::thrift::protocol::T_BOOL, 1);
@@ -961,7 +929,6 @@ uint32_t TimestampType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t TimeType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1017,7 +984,6 @@ uint32_t TimeType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t TimeType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("TimeType");
 
   xfer += oprot->writeFieldBegin("isAdjustedToUTC", ::apache::thrift::protocol::T_BOOL, 1);
@@ -1036,7 +1002,6 @@ uint32_t TimeType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t IntType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1092,7 +1057,6 @@ uint32_t IntType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t IntType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("IntType");
 
   xfer += oprot->writeFieldBegin("bitWidth", ::apache::thrift::protocol::T_BYTE, 1);
@@ -1111,7 +1075,6 @@ uint32_t IntType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t JsonType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1140,7 +1103,6 @@ uint32_t JsonType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t JsonType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("JsonType");
 
   xfer += oprot->writeFieldStop();
@@ -1151,7 +1113,6 @@ uint32_t JsonType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t BsonType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1180,7 +1141,6 @@ uint32_t BsonType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t BsonType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("BsonType");
 
   xfer += oprot->writeFieldStop();
@@ -1191,7 +1151,6 @@ uint32_t BsonType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t LogicalType::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1337,7 +1296,6 @@ uint32_t LogicalType::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t LogicalType::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("LogicalType");
 
   if (this->__isset.STRING) {
@@ -1418,7 +1376,6 @@ uint32_t LogicalType::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t SchemaElement::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1541,7 +1498,6 @@ uint32_t SchemaElement::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t SchemaElement::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("SchemaElement");
 
   if (this->__isset.type) {
@@ -1601,7 +1557,6 @@ uint32_t SchemaElement::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t DataPageHeader::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1693,7 +1648,6 @@ uint32_t DataPageHeader::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t DataPageHeader::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("DataPageHeader");
 
   xfer += oprot->writeFieldBegin("num_values", ::apache::thrift::protocol::T_I32, 1);
@@ -1725,7 +1679,6 @@ uint32_t DataPageHeader::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t IndexPageHeader::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1754,7 +1707,6 @@ uint32_t IndexPageHeader::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t IndexPageHeader::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("IndexPageHeader");
 
   xfer += oprot->writeFieldStop();
@@ -1765,7 +1717,6 @@ uint32_t IndexPageHeader::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t DictionaryPageHeader::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1831,7 +1782,6 @@ uint32_t DictionaryPageHeader::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t DictionaryPageHeader::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("DictionaryPageHeader");
 
   xfer += oprot->writeFieldBegin("num_values", ::apache::thrift::protocol::T_I32, 1);
@@ -1855,7 +1805,6 @@ uint32_t DictionaryPageHeader::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t DataPageHeaderV2::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -1973,7 +1922,6 @@ uint32_t DataPageHeaderV2::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t DataPageHeaderV2::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("DataPageHeaderV2");
 
   xfer += oprot->writeFieldBegin("num_values", ::apache::thrift::protocol::T_I32, 1);
@@ -2018,7 +1966,6 @@ uint32_t DataPageHeaderV2::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t SplitBlockAlgorithm::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2047,7 +1994,6 @@ uint32_t SplitBlockAlgorithm::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t SplitBlockAlgorithm::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("SplitBlockAlgorithm");
 
   xfer += oprot->writeFieldStop();
@@ -2058,7 +2004,6 @@ uint32_t SplitBlockAlgorithm::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t BloomFilterAlgorithm::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2100,7 +2045,6 @@ uint32_t BloomFilterAlgorithm::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t BloomFilterAlgorithm::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("BloomFilterAlgorithm");
 
   if (this->__isset.BLOCK) {
@@ -2116,7 +2060,6 @@ uint32_t BloomFilterAlgorithm::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t XxHash::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2145,7 +2088,6 @@ uint32_t XxHash::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t XxHash::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("XxHash");
 
   xfer += oprot->writeFieldStop();
@@ -2156,7 +2098,6 @@ uint32_t XxHash::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t BloomFilterHash::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2198,7 +2139,6 @@ uint32_t BloomFilterHash::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t BloomFilterHash::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("BloomFilterHash");
 
   if (this->__isset.XXHASH) {
@@ -2214,7 +2154,6 @@ uint32_t BloomFilterHash::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t Uncompressed::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2243,7 +2182,6 @@ uint32_t Uncompressed::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t Uncompressed::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("Uncompressed");
 
   xfer += oprot->writeFieldStop();
@@ -2254,7 +2192,6 @@ uint32_t Uncompressed::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t BloomFilterCompression::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2296,7 +2233,6 @@ uint32_t BloomFilterCompression::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t BloomFilterCompression::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("BloomFilterCompression");
 
   if (this->__isset.UNCOMPRESSED) {
@@ -2312,7 +2248,6 @@ uint32_t BloomFilterCompression::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t BloomFilterHeader::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2390,7 +2325,6 @@ uint32_t BloomFilterHeader::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t BloomFilterHeader::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("BloomFilterHeader");
 
   xfer += oprot->writeFieldBegin("numBytes", ::apache::thrift::protocol::T_I32, 1);
@@ -2417,7 +2351,6 @@ uint32_t BloomFilterHeader::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t PageHeader::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2526,7 +2459,6 @@ uint32_t PageHeader::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t PageHeader::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("PageHeader");
 
   xfer += oprot->writeFieldBegin("type", ::apache::thrift::protocol::T_I32, 1);
@@ -2574,7 +2506,6 @@ uint32_t PageHeader::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t KeyValue::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2627,7 +2558,6 @@ uint32_t KeyValue::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t KeyValue::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("KeyValue");
 
   xfer += oprot->writeFieldBegin("key", ::apache::thrift::protocol::T_STRING, 1);
@@ -2647,7 +2577,6 @@ uint32_t KeyValue::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t SortingColumn::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2714,7 +2643,6 @@ uint32_t SortingColumn::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t SortingColumn::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("SortingColumn");
 
   xfer += oprot->writeFieldBegin("column_idx", ::apache::thrift::protocol::T_I32, 1);
@@ -2737,7 +2665,6 @@ uint32_t SortingColumn::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t PageEncodingStats::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -2808,7 +2735,6 @@ uint32_t PageEncodingStats::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t PageEncodingStats::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("PageEncodingStats");
 
   xfer += oprot->writeFieldBegin("page_type", ::apache::thrift::protocol::T_I32, 1);
@@ -2831,7 +2757,6 @@ uint32_t PageEncodingStats::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t ColumnMetaData::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3071,7 +2996,6 @@ uint32_t ColumnMetaData::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t ColumnMetaData::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("ColumnMetaData");
 
   xfer += oprot->writeFieldBegin("type", ::apache::thrift::protocol::T_I32, 1);
@@ -3186,7 +3110,6 @@ uint32_t ColumnMetaData::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t EncryptionWithFooterKey::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3215,7 +3138,6 @@ uint32_t EncryptionWithFooterKey::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t EncryptionWithFooterKey::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("EncryptionWithFooterKey");
 
   xfer += oprot->writeFieldStop();
@@ -3226,7 +3148,6 @@ uint32_t EncryptionWithFooterKey::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t EncryptionWithColumnKey::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3291,7 +3212,6 @@ uint32_t EncryptionWithColumnKey::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t EncryptionWithColumnKey::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("EncryptionWithColumnKey");
 
   xfer += oprot->writeFieldBegin("path_in_schema", ::apache::thrift::protocol::T_LIST, 1);
@@ -3319,7 +3239,6 @@ uint32_t EncryptionWithColumnKey::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t ColumnCryptoMetaData::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3369,7 +3288,6 @@ uint32_t ColumnCryptoMetaData::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t ColumnCryptoMetaData::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("ColumnCryptoMetaData");
 
   if (this->__isset.ENCRYPTION_WITH_FOOTER_KEY) {
@@ -3390,7 +3308,6 @@ uint32_t ColumnCryptoMetaData::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t ColumnChunk::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3499,7 +3416,6 @@ uint32_t ColumnChunk::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t ColumnChunk::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("ColumnChunk");
 
   if (this->__isset.file_path) {
@@ -3554,7 +3470,6 @@ uint32_t ColumnChunk::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t RowGroup::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3677,7 +3592,6 @@ uint32_t RowGroup::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t RowGroup::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("RowGroup");
 
   xfer += oprot->writeFieldBegin("columns", ::apache::thrift::protocol::T_LIST, 1);
@@ -3736,7 +3650,6 @@ uint32_t RowGroup::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t TypeDefinedOrder::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3765,7 +3678,6 @@ uint32_t TypeDefinedOrder::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t TypeDefinedOrder::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("TypeDefinedOrder");
 
   xfer += oprot->writeFieldStop();
@@ -3776,7 +3688,6 @@ uint32_t TypeDefinedOrder::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t ColumnOrder::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3818,7 +3729,6 @@ uint32_t ColumnOrder::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t ColumnOrder::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("ColumnOrder");
 
   if (this->__isset.TYPE_ORDER) {
@@ -3834,7 +3744,6 @@ uint32_t ColumnOrder::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t PageLocation::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -3901,7 +3810,6 @@ uint32_t PageLocation::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t PageLocation::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("PageLocation");
 
   xfer += oprot->writeFieldBegin("offset", ::apache::thrift::protocol::T_I64, 1);
@@ -3924,7 +3832,6 @@ uint32_t PageLocation::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t OffsetIndex::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4001,7 +3908,6 @@ uint32_t OffsetIndex::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t OffsetIndex::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("OffsetIndex");
 
   xfer += oprot->writeFieldBegin("page_locations", ::apache::thrift::protocol::T_LIST, 1);
@@ -4037,7 +3943,6 @@ uint32_t OffsetIndex::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t ColumnIndex::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4213,7 +4118,6 @@ uint32_t ColumnIndex::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t ColumnIndex::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("ColumnIndex");
 
   xfer += oprot->writeFieldBegin("null_pages", ::apache::thrift::protocol::T_LIST, 1);
@@ -4303,7 +4207,6 @@ uint32_t ColumnIndex::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t AesGcmV1::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4361,7 +4264,6 @@ uint32_t AesGcmV1::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t AesGcmV1::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("AesGcmV1");
 
   if (this->__isset.aad_prefix) {
@@ -4387,7 +4289,6 @@ uint32_t AesGcmV1::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t AesGcmCtrV1::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4445,7 +4346,6 @@ uint32_t AesGcmCtrV1::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t AesGcmCtrV1::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("AesGcmCtrV1");
 
   if (this->__isset.aad_prefix) {
@@ -4471,7 +4371,6 @@ uint32_t AesGcmCtrV1::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t EncryptionAlgorithm::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4521,7 +4420,6 @@ uint32_t EncryptionAlgorithm::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t EncryptionAlgorithm::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("EncryptionAlgorithm");
 
   if (this->__isset.AES_GCM_V1) {
@@ -4542,7 +4440,6 @@ uint32_t EncryptionAlgorithm::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t FileMetaData::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4708,7 +4605,6 @@ uint32_t FileMetaData::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t FileMetaData::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("FileMetaData");
 
   xfer += oprot->writeFieldBegin("version", ::apache::thrift::protocol::T_I32, 1);
@@ -4792,7 +4688,6 @@ uint32_t FileMetaData::write(Protocol_* oprot) const {
 template <class Protocol_>
 uint32_t FileCryptoMetaData::read(Protocol_* iprot) {
 
-  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
   std::string fname;
   ::apache::thrift::protocol::TType ftype;
@@ -4845,7 +4740,6 @@ uint32_t FileCryptoMetaData::read(Protocol_* iprot) {
 template <class Protocol_>
 uint32_t FileCryptoMetaData::write(Protocol_* oprot) const {
   uint32_t xfer = 0;
-  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("FileCryptoMetaData");
 
   xfer += oprot->writeFieldBegin("encryption_algorithm", ::apache::thrift::protocol::T_STRUCT, 1);
