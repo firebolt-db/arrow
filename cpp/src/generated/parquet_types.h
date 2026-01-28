@@ -9,9 +9,6 @@
 
 #include <iosfwd>
 
-#include <thrift/Thrift.h>
-#include <thrift/TApplicationException.h>
-#include <thrift/TBase.h>
 #include <thrift/protocol/TProtocol.h>
 #include <thrift/transport/TTransport.h>
 
