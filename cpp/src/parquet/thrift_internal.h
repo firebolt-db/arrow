@@ -637,8 +637,7 @@ class ThriftSerializer {
  public:
   explicit ThriftSerializer(int initial_buffer_size = 1024)
       : mem_buffer_(new ThriftBuffer(initial_buffer_size)) {
-    apache::thrift::protocol::TCompactProtocolFactoryT<ThriftBuffer> factory;
-    protocol_ = factory.getProtocol(mem_buffer_);
+    protocol_  = std::make_shared<apache::thrift::protocol::TCompactProtocolT<ThriftBuffer>>(mem_buffer_);
   }
 
   /// Serialize obj into a memory buffer.  The result is returned in buffer/len.  The
@@ -698,7 +697,7 @@ class ThriftSerializer {
   }
 
   std::shared_ptr<ThriftBuffer> mem_buffer_;
-  std::shared_ptr<apache::thrift::protocol::TProtocol> protocol_;
+  std::shared_ptr<apache::thrift::protocol::TCompactProtocolT<ThriftBuffer>> protocol_;
 };
 
 }  // namespace parquet
