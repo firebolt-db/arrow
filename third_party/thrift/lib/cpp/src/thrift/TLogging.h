@@ -29,10 +29,6 @@
 
 #include <time.h>
 
-#ifdef HAVE_STDINT_H
-#include <stdint.h>
-#endif
-
 /**
  * T_GLOBAL_DEBUGGING_LEVEL = 0: all debugging turned off, debug macros undefined
  * T_GLOBAL_DEBUGGING_LEVEL = 1: all debugging turned on

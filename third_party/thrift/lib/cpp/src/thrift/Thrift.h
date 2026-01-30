@@ -26,12 +26,6 @@
 #include <assert.h>
 
 #include <sys/types.h>
-#ifdef HAVE_NETINET_IN_H
-#include <netinet/in.h>
-#endif
-#ifdef HAVE_INTTYPES_H
-#include <inttypes.h>
-#endif
 #include <string>
 #include <map>
 #include <list>
@@ -48,11 +42,16 @@
 namespace apache {
 namespace thrift {
 
-class TEnumIterator
-    : public std::iterator<std::forward_iterator_tag, std::pair<int, const char*> > {
+class TEnumIterator {
 public:
   TEnumIterator(int n, int* enums, const char** names)
     : ii_(0), n_(n), enums_(enums), names_(names) {}
+
+  using iterator_category = std::forward_iterator_tag;
+  using value_type        = std::pair<int, const char*>;
+  using difference_type   = std::ptrdiff_t;
+  using pointer           = value_type*;
+  using reference         = value_type&;
 
   int operator++() { return ++ii_; }
 

@@ -22,22 +22,6 @@
 #include <limits>
 #include <cstdlib>
 
-#include "thrift/config.h"
-
-/*
- * TCompactProtocol::i*ToZigzag depend on the fact that the right shift
- * operator on a signed integer is an arithmetic (sign-extending) shift.
- * If this is not the case, the current implementation will not work.
- * If anyone encounters this error, we can try to figure out the best
- * way to implement an arithmetic right shift on their platform.
- */
-#if !defined(SIGNED_RIGHT_SHIFT_IS) || !defined(ARITHMETIC_RIGHT_SHIFT)
-# error "Unable to determine the behavior of a signed right shift"
-#endif
-#if SIGNED_RIGHT_SHIFT_IS != ARITHMETIC_RIGHT_SHIFT
-# error "TCompactProtocol currently only works if a signed right shift is arithmetic"
-#endif
-
 #ifdef __GNUC__
 #define UNLIKELY(val) (__builtin_expect((val), 0))
 #else
