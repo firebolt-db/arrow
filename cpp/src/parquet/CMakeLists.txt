@@ -124,7 +124,7 @@ else()
   set(PARQUET_STATIC_INSTALL_INTERFACE_LIBS)
 endif()
 
-set(PARQUET_TEST_LINK_LIBS ${ARROW_TEST_LINK_LIBS} thrift::thrift)
+set(PARQUET_TEST_LINK_LIBS ${ARROW_TEST_LINK_LIBS})
 if(APPLE)
   list(APPEND PARQUET_TEST_LINK_LIBS ${CMAKE_DL_LIBS})
 elseif(NOT MSVC)
@@ -261,16 +261,16 @@ list(APPEND PARQUET_SHARED_LINK_LIBS arrow_shared)
 list(APPEND PARQUET_SHARED_PRIVATE_LINK_LIBS RapidJSON)
 list(APPEND PARQUET_STATIC_LINK_LIBS RapidJSON)
 
-# These are libraries that we will link privately with parquet_shared (as they
-# do not need to be linked transitively by other linkers)
-list(APPEND PARQUET_SHARED_PRIVATE_LINK_LIBS thrift::thrift)
-
-# Link publicly with parquet_static (because internal users need to
-# transitively link all dependencies)
-list(APPEND PARQUET_STATIC_LINK_LIBS thrift::thrift)
-if(NOT THRIFT_VENDORED)
-  list(APPEND PARQUET_STATIC_INSTALL_INTERFACE_LIBS thrift::thrift)
-endif()
+# === thrift
+# FIR-52061: compile a bare-bones forked Thrift directly into the parquet
+# library instead of linking against thrift::thrift, so the fast
+# metadata-reader patches can modify the Thrift sources.
+set(THRIFT_DIR "${ARROW_SOURCE_DIR}/../third_party/thrift/lib/cpp")
+set(PARQUET_SRCS ${PARQUET_SRCS}
+    "${THRIFT_DIR}/src/thrift/transport/TTransportException.cpp"
+    "${THRIFT_DIR}/src/thrift/transport/TBufferTransports.cpp")
+include_directories(${THRIFT_DIR}/src)
+# === end thrift
 
 if(ARROW_WITH_OPENTELEMETRY)
   list(APPEND PARQUET_SHARED_PRIVATE_LINK_LIBS ${ARROW_OPENTELEMETRY_LIBS})
@@ -306,7 +306,6 @@ add_arrow_lib(parquet
 if(WIN32 AND NOT (ARROW_TEST_LINKAGE STREQUAL "static"))
   add_library(parquet_test_support STATIC
               "${PARQUET_THRIFT_SOURCE_DIR}/parquet_types.cpp")
-  target_link_libraries(parquet_test_support thrift::thrift)
   list(PREPEND PARQUET_TEST_LINK_LIBS parquet_test_support)
   list(APPEND PARQUET_LIBRARIES parquet_test_support)
 endif()

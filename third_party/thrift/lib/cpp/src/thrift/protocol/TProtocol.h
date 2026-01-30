@@ -34,9 +34,6 @@
 
 #include <memory>
 
-#ifdef HAVE_NETINET_IN_H
-#include <netinet/in.h>
-#endif
 #include <sys/types.h>
 #include <string>
 #include <map>
@@ -81,10 +78,6 @@ static inline To bitwise_cast(From from) {
   return u.t;
 }
 
-
-#ifdef HAVE_SYS_PARAM_H
-#include <sys/param.h>
-#endif
 
 #ifndef __THRIFT_BYTE_ORDER
 # if defined(BYTE_ORDER) && defined(LITTLE_ENDIAN) && defined(BIG_ENDIAN)

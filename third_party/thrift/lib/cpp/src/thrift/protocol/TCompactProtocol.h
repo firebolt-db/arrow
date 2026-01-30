@@ -104,7 +104,7 @@ public:
    * Writing functions
    */
 
-  virtual uint32_t writeMessageBegin(const std::string& name,
+  uint32_t writeMessageBegin(const std::string& name,
                                      const TMessageType messageType,
                                      const int32_t seqid);
 
@@ -120,7 +120,7 @@ public:
 
   uint32_t writeSetBegin(const TType elemType, const uint32_t size);
 
-  virtual uint32_t writeMapBegin(const TType keyType, const TType valType, const uint32_t size);
+  uint32_t writeMapBegin(const TType keyType, const TType valType, const uint32_t size);
 
   uint32_t writeBool(const bool value);
 
@@ -160,7 +160,7 @@ public:
   * These methods are called by structs, but don't actually have any wired
   * output or purpose
   */
-  virtual uint32_t writeMessageEnd() { return 0; }
+  uint32_t writeMessageEnd() { return 0; }
   uint32_t writeMapEnd() { return 0; }
   uint32_t writeListEnd() { return 0; }
   uint32_t writeSetEnd() { return 0; }
