@@ -25,7 +25,9 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -411,11 +413,15 @@ class ThriftDeserializer {
  public:
   explicit ThriftDeserializer(const ReaderProperties& properties)
       : ThriftDeserializer(properties.thrift_string_size_limit(),
-                           properties.thrift_container_size_limit()) {}
+                           properties.thrift_container_size_limit(),
+                           properties.firebolt_columns_filter()) {}
 
-  ThriftDeserializer(int32_t string_size_limit, int32_t container_size_limit)
+  ThriftDeserializer(
+      int32_t string_size_limit, int32_t container_size_limit,
+      const std::unordered_set<std::string_view>* firebolt_columns_filter = nullptr)
       : string_size_limit_(string_size_limit),
-        container_size_limit_(container_size_limit) {}
+        container_size_limit_(container_size_limit),
+        firebolt_columns_filter_{firebolt_columns_filter} {}
 
   // Deserialize a thrift message from buf/len.  buf/len must at least contain
   // all the bytes needed to store the thrift message.  On return, len will be
@@ -464,13 +470,17 @@ class ThriftDeserializer {
   void DeserializeUnencryptedMessage(const uint8_t* buf, uint32_t* len,
                                      T* deserialized_msg) {
     // Deserialize msg bytes into c++ thrift msg using memory transport.
+    using namespace apache::thrift::protocol;
     auto tmem_transport = CreateReadOnlyMemoryBuffer(const_cast<uint8_t*>(buf), *len);
-    auto tproto = apache::thrift::protocol::TCompactProtocolT<ThriftBuffer>(
-        tmem_transport, string_size_limit_, container_size_limit_);
+    auto tproto = TCompactProtocolT<ThriftBuffer>(tmem_transport, string_size_limit_,
+                                                  container_size_limit_);
     try {
-      deserialized_msg
-          ->template read<apache::thrift::protocol::TCompactProtocolT<ThriftBuffer>>(
-              &tproto);
+      if constexpr (std::is_same_v<T, parquet::format::FileMetaData>) {
+        deserialized_msg->template read<TCompactProtocolT<ThriftBuffer>>(
+            &tproto, firebolt_columns_filter_);
+      } else {
+        deserialized_msg->template read<TCompactProtocolT<ThriftBuffer>>(&tproto);
+      }
     } catch (std::exception& e) {
       std::stringstream ss;
       ss << "Couldn't deserialize thrift: " << e.what() << "\n";
@@ -482,6 +492,7 @@ class ThriftDeserializer {
 
   const int32_t string_size_limit_;
   const int32_t container_size_limit_;
+  const std::unordered_set<std::string_view>* firebolt_columns_filter_{nullptr};
 };
 
 /// Utility class to serialize thrift objects to a binary format.  This object
@@ -492,7 +503,9 @@ class ThriftSerializer {
  public:
   explicit ThriftSerializer(int initial_buffer_size = 1024)
       : mem_buffer_(new ThriftBuffer(initial_buffer_size)) {
-    protocol_  = std::make_shared<apache::thrift::protocol::TCompactProtocolT<ThriftBuffer>>(mem_buffer_);
+    protocol_ =
+        std::make_shared<apache::thrift::protocol::TCompactProtocolT<ThriftBuffer>>(
+            mem_buffer_);
   }
 
   /// Serialize obj into a memory buffer.  The result is returned in buffer/len.  The

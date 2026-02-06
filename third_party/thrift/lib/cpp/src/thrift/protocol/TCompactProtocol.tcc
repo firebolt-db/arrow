@@ -657,6 +657,34 @@ uint32_t TCompactProtocolT<Transport_>::readDouble(double& dub) {
   return 8;
 }
 
+// firebolt start
+template <class Transport_>
+uint32_t TCompactProtocolT<Transport_>::readStringView(std::string_view& str) {
+  int32_t rsize = 0;
+  int32_t size;
+
+  rsize += readVarint32(size);
+  // Catch empty string case
+  if (size == 0) {
+    str = std::string_view();
+    return rsize;
+  }
+  // Catch error cases
+  if (size < 0) {
+    throw TProtocolException(TProtocolException::NEGATIVE_SIZE);
+  }
+  // Note: despite not using string_buf_, we still check the size limit as a sanity check
+  // and to protect callers that end up copying the string_view to a std::string.
+  if (string_limit_ > 0 && size > string_limit_) {
+    throw TProtocolException(TProtocolException::SIZE_LIMIT);
+  }
+
+  str = std::string_view(reinterpret_cast<const char*>(trans_->getReadPosition()), size);
+  trans_->consume(size);
+  return rsize + (uint32_t)size;
+}
+// firebolt end
+
 template <class Transport_>
 uint32_t TCompactProtocolT<Transport_>::readString(std::string& str) {
   return readBinary(str);

@@ -213,6 +213,9 @@ public:
   uint32_t readDouble(double& dub);
 
   uint32_t readString(std::string& str);
+  // Firebolt addition: read string as a std::string_view instead of a std::string.
+  // Caller needs to be aware that the string_view is only valid for the lifetime of the protocol.
+  uint32_t readStringView(std::string_view& str);
 
   uint32_t readBinary(std::string& str);
 

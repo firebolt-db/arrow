@@ -314,6 +314,11 @@ public:
     *sz = static_cast<uint32_t>(wBase_ - rBase_);
   }
 
+  // Firebolt addition: get the current read position. Used to read strings as string_view.
+  const uint8_t* getReadPosition() const {
+    return rBase_;
+  }
+
   std::string getBufferAsString() {
     if (buffer_ == nullptr) {
       return "";

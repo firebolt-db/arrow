@@ -103,6 +103,16 @@ class PARQUET_EXPORT ReaderProperties {
   /// non-contiguous "corded buffers"
   void use_firebolt_corded_buffers() { firebolt_corded_buffers_ = true; }
 
+  // Firebolt column filtering: when not nullptr, only the columns in the set are read.
+  // TODO(anyone): support filtering by field_id for Iceberg support.
+  // TODO(anyone): consider supporting separate filters for schema and RowGroup metadata:
+  // We might want to read many columns, but only care about statistics for very few.
+  const std::unordered_set<std::string_view>* firebolt_columns_filter() const { return firebolt_columns_filter_; }
+  // Firebolt column filtering: set which columns are required for reading.
+  // Note: this filtering is applied at the top level only, nested filtering is not implemented.
+  // DO NOT pass dot strings here to filter nested columns.
+  void set_firebolt_columns_filter(const std::unordered_set<std::string_view>* value) { firebolt_columns_filter_ = value; }
+
   /// Return the size of the buffered stream buffer.
   int64_t buffer_size() const { return buffer_size_; }
   /// Set the size of the buffered stream buffer in bytes.
@@ -156,6 +166,7 @@ class PARQUET_EXPORT ReaderProperties {
   // Used with a RecordReader.
   bool read_dense_for_nullable_ = false;
   bool firebolt_corded_buffers_ = false;
+  const std::unordered_set<std::string_view>* firebolt_columns_filter_{nullptr};
   size_t footer_read_size_ = kDefaultFooterReadSize;
   std::shared_ptr<FileDecryptionProperties> file_decryption_properties_;
 };
