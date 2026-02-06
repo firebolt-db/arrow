@@ -7,9 +7,58 @@
 #ifndef parquet_TYPES_TCC
 #define parquet_TYPES_TCC
 
+#include <algorithm>
+#include <string_view>
 #include "parquet_types.h"
 
 namespace parquet { namespace format {
+
+// firebolt start
+/// Reads a list of leaf-level data (e.g. column chunks, column orders) with optional column
+/// filtering.  Parquet stores these lists in schema leaf order. When filtering is enabled
+/// (schema_elements != nullptr), only the list indexes that match a firebolt_leaf_index from
+/// `schema_elements` are read. All other items are skipped. Thrift is sequential and does not have
+/// random access, so skipping still consumes the stream, but does not copy the elements from the
+/// stream.  Requirement: schema_elements MUST be stored in schema leaf order. Pass nullptr for
+/// schema_elements to read every element (unfiltered).
+template <typename DataT, typename Protocol_>
+static uint32_t read_leafs(const std::vector<SchemaElement>* schema_elements,
+                           uint32_t list_size, Protocol_* iprot,
+                           std::vector<DataT>& container) {
+  uint32_t xfer = 0;
+  if (!schema_elements) {
+    // every element needs to be read
+    for (uint32_t i = 0; i < list_size; ++i) {
+      xfer += container.emplace_back().read(iprot);
+    }
+    return xfer;
+  }
+
+  // Only the indexes specified in the leaf elements (num_children == 0) need to be read.
+  // notice the first element is the schema root and is never a leaf element.
+  auto it = schema_elements->begin();
+  auto next = [&]() -> uint32_t {
+    while (++it != schema_elements->end()) {
+      if (it->num_children == 0) {
+        return it->firebolt_leaf_index;
+      }
+    }
+    return list_size;
+  };
+
+  DataT temp;
+  uint32_t next_leaf_idx = next();
+  for (uint32_t i = 0; i < list_size; ++i) {
+    if (i == next_leaf_idx) {
+      xfer += container.emplace_back().read(iprot);
+      next_leaf_idx = next();
+    } else {
+      xfer += temp.skip(iprot);
+    }
+  }
+  return xfer;
+}
+// firebolt end
 
 template <class Protocol_>
 uint32_t SizeStatistics::read(Protocol_* iprot) {
@@ -1849,8 +1898,10 @@ uint32_t LogicalType::write(Protocol_* oprot) const {
   return xfer;
 }
 
+// Firebolt addition: use_string_view_for_name flag to read the name field as a string_view
+// instead of a string. This allows us to avoid copying the string for columns that we end up skipping.
 template <class Protocol_>
-uint32_t SchemaElement::read(Protocol_* iprot) {
+uint32_t SchemaElement::read(Protocol_* iprot, bool use_string_view_for_name) {
 
   uint32_t xfer = 0;
   std::string fname;
@@ -1901,7 +1952,13 @@ uint32_t SchemaElement::read(Protocol_* iprot) {
         break;
       case 4:
         if (ftype == ::apache::thrift::protocol::T_STRING) {
-          xfer += iprot->readString(this->name);
+          // Firebolt begin
+          if (use_string_view_for_name) {
+            xfer += iprot->readStringView(this->name_view);
+          } else {
+            xfer += iprot->readString(this->name);
+          }
+          // Firebolt end
           isset_name = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -3230,6 +3287,12 @@ uint32_t PageEncodingStats::write(Protocol_* oprot) const {
   return xfer;
 }
 
+// Firebolt addition
+template <class Protocol_>
+uint32_t ColumnChunk::skip(Protocol_* iprot) {
+  return ::apache::thrift::protocol::skip<Protocol_>(*iprot, ::apache::thrift::protocol::T_STRUCT);
+}
+
 template <class Protocol_>
 uint32_t ColumnMetaData::read(Protocol_* iprot) {
 
@@ -3956,8 +4019,10 @@ uint32_t ColumnChunk::write(Protocol_* oprot) const {
   return xfer;
 }
 
+// Firebolt addition: `schema_elements` contains the columns that we want to scan. Metadata
+// for the other columns will be skipped. If it is nullptr, we read all columns.
 template <class Protocol_>
-uint32_t RowGroup::read(Protocol_* iprot) {
+uint32_t RowGroup::read(Protocol_* iprot, const std::vector<SchemaElement>* schema_elements) {
 
   uint32_t xfer = 0;
   std::string fname;
@@ -3984,15 +4049,13 @@ uint32_t RowGroup::read(Protocol_* iprot) {
         if (ftype == ::apache::thrift::protocol::T_LIST) {
           {
             this->columns.clear();
-            uint32_t _size251;
+            // Firebolt begin: filtered list reading
+            uint32_t list_size;
             ::apache::thrift::protocol::TType _etype254;
-            xfer += iprot->readListBegin(_etype254, _size251);
-            this->columns.resize(_size251);
-            uint32_t _i255;
-            for (_i255 = 0; _i255 < _size251; ++_i255)
-            {
-              xfer += this->columns[_i255].read(iprot);
-            }
+            xfer += iprot->readListBegin(_etype254, list_size);
+            this->columns.reserve(list_size);
+            xfer += read_leafs<ColumnChunk, Protocol_>(schema_elements, list_size, iprot, this->columns);
+            // Firebolt end
             xfer += iprot->readListEnd();
           }
           isset_columns = true;
@@ -4213,6 +4276,11 @@ uint32_t ColumnOrder::read(Protocol_* iprot) {
   xfer += iprot->readStructEnd();
 
   return xfer;
+}
+
+template <class Protocol_>
+uint32_t ColumnOrder::skip(Protocol_* iprot) {
+  return ::apache::thrift::protocol::skip<Protocol_>(*iprot, ::apache::thrift::protocol::T_STRUCT);
 }
 
 template <class Protocol_>
@@ -4926,8 +4994,11 @@ uint32_t EncryptionAlgorithm::write(Protocol_* oprot) const {
   return xfer;
 }
 
+// Firebolt addition: `column_filters` contains the columns that we want to scan. Metadata
+// for the other columns will be skipped. If it is nullptr, we read all columns.
 template <class Protocol_>
-uint32_t FileMetaData::read(Protocol_* iprot) {
+uint32_t FileMetaData::read(Protocol_* iprot,
+                            const std::unordered_set<std::string_view>* column_filters) {
 
   uint32_t xfer = 0;
   std::string fname;
@@ -4963,15 +5034,88 @@ uint32_t FileMetaData::read(Protocol_* iprot) {
         if (ftype == ::apache::thrift::protocol::T_LIST) {
           {
             this->schema.clear();
-            uint32_t _size348;
-            ::apache::thrift::protocol::TType _etype351;
-            xfer += iprot->readListBegin(_etype351, _size348);
-            this->schema.resize(_size348);
-            uint32_t _i352;
-            for (_i352 = 0; _i352 < _size348; ++_i352)
-            {
-              xfer += this->schema[_i352].read(iprot);
+            // Firebolt begin
+            // When column_filters is set, we stream through the schema tree but only retain
+            // elements for requested columns. Thrift is sequential and does not have random access,
+            // so we must read every element to advance the stream, but we pop elements we don't
+            // need. Decisions for nested fields are only made at the top level (i.e., when we only
+            // care about struct.nested.child, column_filters contains "struct" and we keep all
+            // other children of struct as well); if we skip an element we skip all its descendants,
+            // otherwise we keep its whole subtree. firebolt_leaf_index records each kept element's
+            // position in the flattened leaf list, so later (row_groups, column_orders) we know
+            // which list positions to read.
+            uint32_t list_size;
+            ::apache::thrift::protocol::TType type;
+            xfer += iprot->readListBegin(type, list_size);
+            this->schema.reserve(list_size);
+            SchemaElement temp;
+            uint32_t current_leaf_idx{0};
+
+            // We only decide whether to keep or read a schema element at the top level.
+            // Once decision is made, we keep or skip all the child elements unconditionally.
+            // Track how many elements remain in the current keep/skip run.
+            size_t keep_always_count = 0;
+            size_t skip_always_count = 0;
+
+            // first parse the root element, which usually is called "schema".
+            auto& schema_root = this->schema.emplace_back();
+            xfer += schema_root.read(iprot, /* use_string_view_for_name */ false);
+            uint32_t idx = 1;
+            if (column_filters) {
+              schema_root.num_children = 0;
+              keep_always_count = 0;
+              this->firebolt_schema_is_filtered_ = true;
+            } else {
+              // Unconditionally read all elements. The second loop will be skipped since idx will already be list_size.
+              this->firebolt_schema_is_filtered_ = false;
+              for (; idx < list_size; ++idx)
+              {
+                  xfer += this->schema.emplace_back().read(iprot, /* use_string_view_for_name */ false);
+              }
             }
+
+            for (; idx < list_size; ++idx)
+            {
+              if (keep_always_count == 0) {
+                xfer += this->schema.emplace_back().read(iprot, /* use_string_view_for_name */ true);
+                const auto& name_view = this->schema.back().name_view;
+                const auto children = this->schema.back().num_children;
+                if (skip_always_count) {
+                  skip_always_count--;
+                  skip_always_count += children;
+                  this->schema.pop_back();
+                } else if (column_filters->contains(name_view)) {
+                  schema_root.num_children += 1;
+                  auto& el = this->schema.back();
+                  // to keep the element we need to fill the name field
+                  el.name.assign(name_view);
+                  // Keep track of leaf index's original order.
+                  // Notice that storing leaf index on non leafs does not have side effects.
+                  el.firebolt_leaf_index = current_leaf_idx;
+                  keep_always_count = el.num_children;
+                } else {
+                  // skip this element and its children altogether
+                  this->schema.pop_back();
+                  skip_always_count += children;
+                }
+                // we need to keep track of leaf index.
+                if (children == 0) {
+                  current_leaf_idx++;
+                }
+              } else {
+                keep_always_count--;
+                xfer += this->schema.emplace_back().read(iprot, /* use_string_view_for_name */ false);
+                // Note: setting this for non-leaf fields is okay, it is ignored.
+                this->schema.back().firebolt_leaf_index = current_leaf_idx;
+                // we should also keep unconditionally all the child elements (since nested filtering is not implemented)
+                const auto children = this->schema.back().num_children;
+                keep_always_count += children;
+                if (children == 0) {
+                  current_leaf_idx++;
+                }
+              }
+            }
+            // Firebolt end
             xfer += iprot->readListEnd();
           }
           isset_schema = true;
@@ -4994,12 +5138,15 @@ uint32_t FileMetaData::read(Protocol_* iprot) {
             uint32_t _size353;
             ::apache::thrift::protocol::TType _etype356;
             xfer += iprot->readListBegin(_etype356, _size353);
-            this->row_groups.resize(_size353);
+            // Firebolt begin: columns_for_filtering wiring
+            this->row_groups.reserve(_size353);
             uint32_t _i357;
+            const std::vector<SchemaElement>* columns_for_filtering = firebolt_schema_is_filtered_ ? &schema : nullptr;
             for (_i357 = 0; _i357 < _size353; ++_i357)
             {
-              xfer += this->row_groups[_i357].read(iprot);
+              xfer += this->row_groups.emplace_back().read(iprot, columns_for_filtering);
             }
+            // Firebolt end
             xfer += iprot->readListEnd();
           }
           isset_row_groups = true;
@@ -5038,16 +5185,19 @@ uint32_t FileMetaData::read(Protocol_* iprot) {
       case 7:
         if (ftype == ::apache::thrift::protocol::T_LIST) {
           {
+            // Firebolt begin
+            // by now we should have already deserialized the schema elements
+            assert(!this->schema.empty());
+
             this->column_orders.clear();
-            uint32_t _size363;
-            ::apache::thrift::protocol::TType _etype366;
-            xfer += iprot->readListBegin(_etype366, _size363);
-            this->column_orders.resize(_size363);
-            uint32_t _i367;
-            for (_i367 = 0; _i367 < _size363; ++_i367)
-            {
-              xfer += this->column_orders[_i367].read(iprot);
-            }
+            uint32_t list_size;
+            ::apache::thrift::protocol::TType tt;
+            xfer += iprot->readListBegin(tt, list_size);
+            this->column_orders.reserve(list_size);
+
+            auto* schema_elements = this->firebolt_schema_is_filtered_ ? &this->schema : nullptr;
+            xfer += read_leafs<ColumnOrder, Protocol_>(schema_elements, list_size, iprot, this->column_orders);
+            // Firebolt end
             xfer += iprot->readListEnd();
           }
           this->__isset.column_orders = true;

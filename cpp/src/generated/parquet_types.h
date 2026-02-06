@@ -13,7 +13,9 @@
 #include <thrift/transport/TTransport.h>
 
 #include <functional>
+#include <unordered_set>
 #include <memory>
+#include <string_view>
 
 #include "parquet/windows_compatibility.h"
 
@@ -1781,6 +1783,9 @@ class SchemaElement {
    * Name of the field in the schema
    */
   std::string name;
+  // Firebolt addition: string_view for name, to avoid unnecessary allocations for fields
+  // that we decide to skip (see use_string_view_for_name in read())
+  std::string_view name_view;
   /**
    * Nested fields.  Since thrift does not support nested fields,
    * the nesting is flattened to a single list by a depth-first traversal.
@@ -1847,8 +1852,15 @@ class SchemaElement {
 
   bool operator < (const SchemaElement & ) const;
 
+  // Firebolt addition: original index of each leaf column in the full schema.
+  // Needed to map back to the full schema when using firebolt_columns_filter.
+  // See also `read_leafs` in parquet_types.tcc.
+  uint32_t firebolt_leaf_index{0};
+
+  // Firebolt addition: use_string_view_for_name flag to avoid allocations for
+  // columns that we end up skipping.
   template <class Protocol_>
-  uint32_t read(Protocol_* iprot);
+  uint32_t read(Protocol_* iprot, bool use_string_view_for_name);
   template <class Protocol_>
   uint32_t write(Protocol_* oprot) const;
 
@@ -3076,6 +3088,9 @@ class ColumnChunk {
   uint32_t read(Protocol_* iprot);
   template <class Protocol_>
   uint32_t write(Protocol_* oprot) const;
+  // Firebolt addition: used in read_leafs to avoid deserializing what we do not want to read.
+  template <class Protocol_>
+  uint32_t skip(Protocol_* iprot);
 
   virtual void printTo(std::ostream& out) const;
 };
@@ -3159,8 +3174,10 @@ class RowGroup {
 
   bool operator < (const RowGroup & ) const;
 
+  // Firebolt addition: `schema_elements` contains the columns that we want to scan. Metadata
+  // for the other columns will be skipped. If it is nullptr, we read all columns.
   template <class Protocol_>
-  uint32_t read(Protocol_* iprot);
+  uint32_t read(Protocol_* iprot, const std::vector<SchemaElement>* schema_elements = nullptr);
   template <class Protocol_>
   uint32_t write(Protocol_* oprot) const;
 
@@ -3302,6 +3319,11 @@ class ColumnOrder {
   uint32_t read(Protocol_* iprot);
   template <class Protocol_>
   uint32_t write(Protocol_* oprot) const;
+
+  // Firebolt addition: used in read_leafs to avoid deserializing what we do not want to read.
+  // See also ColumnChunk::skip.
+  template <class Protocol_>
+  uint32_t skip(Protocol_* iprot);
 
   virtual void printTo(std::ostream& out) const;
 };
@@ -3536,6 +3558,10 @@ class ColumnIndex {
   uint32_t read(Protocol_* iprot);
   template <class Protocol_>
   uint32_t write(Protocol_* oprot) const;
+  // Firebolt addition: used in read_leafs to avoid deserializing what we do not want to read.
+  // See also ColumnChunk::skip.
+  template <class Protocol_>
+  static uint32_t skip(Protocol_* iprot);
 
   virtual void printTo(std::ostream& out) const;
 };
@@ -3814,12 +3840,19 @@ class FileMetaData {
 
   bool operator < (const FileMetaData & ) const;
 
+  // Firebolt addition: `column_filters` contains the columns that we want to scan. Metadata
+  // for the other columns will be skipped. If it is nullptr, we read all columns.
   template <class Protocol_>
-  uint32_t read(Protocol_* iprot);
+  uint32_t read(Protocol_* iprot, const std::unordered_set<std::string_view>* column_filters);
   template <class Protocol_>
   uint32_t write(Protocol_* oprot) const;
 
   virtual void printTo(std::ostream& out) const;
+
+private:
+  // Firebolt addition: whether the schema was parsed with `column_filters` set, i.e. only requested
+  // columns are in `schema` and `firebolt_leaf_index` is used to map back to the full schema.
+  bool firebolt_schema_is_filtered_{false};
 };
 
 void swap(FileMetaData &a, FileMetaData &b);

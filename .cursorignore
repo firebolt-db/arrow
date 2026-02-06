@@ -1,0 +1,13 @@
+build/
+build-*/
+venv/
+.cache/
+# Firebolt: we only care about the cpp implementation, skip the other languages
+c_glib/
+csharp/
+js/
+matlab/
+python/
+r/
+ruby/
+swift/

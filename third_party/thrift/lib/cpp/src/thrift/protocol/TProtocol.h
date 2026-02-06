@@ -200,8 +200,10 @@ uint32_t skip(Protocol_& prot, TType type) {
     return prot.readDouble(dub);
   }
   case T_STRING: {
-    std::string str;
-    return prot.readBinary(str);
+    // Firebolt begin: when skipping a string, don't copy it, just "read" the string_view.
+    std::string_view str;
+    return prot.readStringView(str);
+    // Firebolt end
   }
   case T_STRUCT: {
     uint32_t result = 0;
