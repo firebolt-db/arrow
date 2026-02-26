@@ -35,8 +35,8 @@ case "$(uname -m)" in
 esac
 
 version=$1
-if [[ "${version}" -eq "default" ]]; then
-  version="v0.39.0"
+if [[ "${version}" = "default" ]]; then
+  version="v0.55.0"
 fi
 
 # The Python to install pipx with
