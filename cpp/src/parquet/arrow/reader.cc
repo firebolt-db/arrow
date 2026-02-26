@@ -158,13 +158,13 @@ class FileReaderImpl : public FileReader {
                                 reader_properties_, &manifest_);
   }
 
-  FileColumnIteratorFactory SomeRowGroupsFactory(std::vector<int> row_groups) {
+  FileColumnIteratorFactory SomeRowGroupsFactory(std::vector<int> row_groups) const {
     return [row_groups](int i, ParquetFileReader* reader) {
       return new FileColumnIterator(i, reader, row_groups);
     };
   }
 
-  FileColumnIteratorFactory AllRowGroupsFactory() {
+  FileColumnIteratorFactory AllRowGroupsFactory() const {
     return SomeRowGroupsFactory(Iota(reader_->metadata()->num_row_groups()));
   }
 
@@ -209,7 +209,7 @@ class FileReaderImpl : public FileReader {
   Status GetFieldReader(int i,
                         const std::shared_ptr<std::unordered_set<int>>& included_leaves,
                         const std::vector<int>& row_groups,
-                        std::unique_ptr<ColumnReaderImpl>* out) {
+                        std::unique_ptr<ColumnReaderImpl>* out) const {
     // Should be covered by GetRecordBatchReader checks but
     // manifest_.schema_fields is a separate variable so be extra careful.
     if (ARROW_PREDICT_FALSE(i < 0 ||
@@ -263,7 +263,7 @@ class FileReaderImpl : public FileReader {
   }
 
   Status GetColumnReader(int column_index, int row_group_index,
-                         std::unique_ptr<ColumnReader>* out) override {
+                         std::unique_ptr<ColumnReader>* out) const override {
     // Find fields to read
     ARROW_ASSIGN_OR_RAISE(std::vector<int> field_indices,
                           manifest_.GetFieldIndices({column_index}));
