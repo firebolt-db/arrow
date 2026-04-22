@@ -13,7 +13,7 @@ on:
 
 jobs:
   pr_conventions:
-    uses: firebolt-analytics/gha-workflows/.github/workflows/conventional_pr.yaml@6ccfd546d5ea43c10c12d27b8d7531ac42498d6a  # v2.25.0
+    uses: firebolt-analytics/gha-workflows/.github/workflows/conventional_pr.yaml@6c80e1ec32794898d18d86160862131160b4ceba  # v3.3.1
     with:
       validate-branch-name: false
       validate-single-commit: false

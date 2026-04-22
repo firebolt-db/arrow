@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-build/
+build*/
 
 apache-rat-*.jar
 arrow-src.tar
