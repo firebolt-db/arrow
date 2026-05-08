@@ -16,13 +16,13 @@
 
 module swift-datagen/main
 
-go 1.20
+go 1.25
 
 require github.com/apache/arrow/go/v12 v12.0.0-20230424155504-5de56928e0fe
 
 require (
 	github.com/andybalholm/brotli v1.0.4 // indirect
-	github.com/apache/thrift v0.16.0 // indirect
+	github.com/apache/thrift v0.23.0 // indirect
 	github.com/goccy/go-json v0.9.11 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/flatbuffers v2.0.8+incompatible // indirect
