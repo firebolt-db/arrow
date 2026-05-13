@@ -98,6 +98,22 @@ jobs:
       LLVM: ${{ matrix.llvm }}
       UBUNTU: ${{ matrix.ubuntu }}
     steps:
+      - name: Clean Up Disk Space on public GitHub Runner
+        if: runner.os == 'Linux'
+        run: |
+            # Space usage before cleanup
+            df -h /
+
+            # Remove unused tool caches (comment any required ones with #)
+            sudo rm -rf /usr/lib/jvm
+            sudo rm -rf /usr/local/.ghcup
+            sudo rm -rf /usr/local/lib/android
+            sudo rm -rf /usr/local/share/powershell
+            sudo rm -rf /usr/share/dotnet
+            sudo rm -rf /usr/share/swift
+
+            # Verify gains
+            df -h /
       - name: Checkout Arrow
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
