@@ -1,0 +1,19 @@
+---
+name: "Lint PR"
+on:
+  pull_request:
+    branches:
+      - main
+      - release-*
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+jobs:
+  pr_conventions:
+    uses: firebolt-analytics/gha-workflows/.github/workflows/conventional_pr.yaml@6c80e1ec32794898d18d86160862131160b4ceba  # v3.3.1
+    with:
+      validate-branch-name: false
+      validate-single-commit: false
