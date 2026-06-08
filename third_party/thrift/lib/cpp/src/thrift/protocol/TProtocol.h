@@ -167,6 +167,26 @@ namespace protocol {
 
 using apache::thrift::transport::TTransport;
 
+// Firebolt: no-op recursion trackers.  The full Apache Thrift versions guard
+// against stack overflow from deeply nested structures via TProtocol
+// recursion-depth counters, which this minimal vendored copy omits.  The
+// generated parquet code (parquet_types.tcc) instantiates these at the top of
+// each read()/write(); we provide no-op stand-ins, templated on the protocol
+// type, so that generated code compiles unchanged against the bare-bones
+// transport without requiring the recursion-depth machinery.
+struct TInputRecursionTracker {
+  template <typename Protocol_>
+  explicit TInputRecursionTracker(Protocol_&) {}
+  // User-declared destructor so the generated code's `tracker` locals are not
+  // flagged as unused (RAII types with non-trivial destructors are exempt).
+  ~TInputRecursionTracker() {}
+};
+struct TOutputRecursionTracker {
+  template <typename Protocol_>
+  explicit TOutputRecursionTracker(Protocol_&) {}
+  ~TOutputRecursionTracker() {}
+};
+
 /**
  * Helper template for implementing TProtocol::skip().
  *
