@@ -401,7 +401,14 @@ class FireboltAllocator {
       *out = memory_pool::internal::kZeroSizeArea;
       return Status::OK();
     }
-    *out = new (static_cast<std::align_val_t>(alignment)) uint8_t[size * sizeof(uint8_t)];
+    // Use the non-throwing aligned new so that an oversized request honors the
+    // MemoryPool contract (return Status::OutOfMemory) instead of propagating an
+    // uncaught std::bad_alloc, matching the other allocators here.
+    *out = new (static_cast<std::align_val_t>(alignment), std::nothrow)
+        uint8_t[size * sizeof(uint8_t)];
+    if (*out == nullptr) {
+      return Status::OutOfMemory("malloc of size ", size, " failed");
+    }
     return Status::OK();
   }
 

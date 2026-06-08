@@ -988,9 +988,7 @@ class TestStatisticsSortOrder : public ::testing::Test {
     }
   }
 
-  void VerifyParquetStats(int64_t slice_size) {
-    ASSERT_OK_AND_ASSIGN(auto pbuffer, parquet_sink_->Finish());
-
+  void VerifyParquetStats(const std::shared_ptr<Buffer>& pbuffer, int64_t slice_size) {
     // Create a ParquetReader instance
     std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
         MakeBufferReader(pbuffer, slice_size);
@@ -1223,8 +1221,11 @@ TYPED_TEST(TestStatisticsSortOrder, MinMax) {
   this->AddNodes("Column ");
   this->SetUpSchema();
   this->WriteParquet();
+  // Finish the sink once: BufferOutputStream::Finish() moves out its buffer, so
+  // it cannot be called repeatedly. Reuse the resulting buffer across slice sizes.
+  ASSERT_OK_AND_ASSIGN(auto pbuffer, this->parquet_sink_->Finish());
   for (auto slice_size : {0, 10, 42, 10000}) {
-    ASSERT_NO_FATAL_FAILURE(this->VerifyParquetStats(slice_size));
+    ASSERT_NO_FATAL_FAILURE(this->VerifyParquetStats(pbuffer, slice_size));
   }
 }
 
