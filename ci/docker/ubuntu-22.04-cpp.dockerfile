@@ -188,25 +188,26 @@ RUN /arrow/ci/scripts/install_sccache.sh unknown-linux-musl /usr/local/bin
 # - Abseil is old
 # - libc-ares-dev does not install CMake config files
 # - opentelemetry-cpp-dev is not packaged
+# Firebolt: trimmed feature set (cpp parquet/orc focus); the rest disabled.
 ENV absl_SOURCE=BUNDLED \
-    ARROW_ACERO=ON \
-    ARROW_AZURE=ON \
+    ARROW_ACERO=OFF \
+    ARROW_AZURE=OFF \
     ARROW_BUILD_STATIC=ON \
     ARROW_BUILD_TESTS=ON \
     ARROW_DEPENDENCY_SOURCE=SYSTEM \
-    ARROW_DATASET=ON \
-    ARROW_FLIGHT=ON \
-    ARROW_FLIGHT_SQL=ON \
-    ARROW_GANDIVA=ON \
-    ARROW_GCS=ON \
-    ARROW_HDFS=ON \
+    ARROW_DATASET=OFF \
+    ARROW_FLIGHT=OFF \
+    ARROW_FLIGHT_SQL=OFF \
+    ARROW_GANDIVA=OFF \
+    ARROW_GCS=OFF \
+    ARROW_HDFS=OFF \
     ARROW_HOME=/usr/local \
     ARROW_INSTALL_NAME_RPATH=OFF \
     ARROW_JEMALLOC=ON \
     ARROW_ORC=ON \
     ARROW_PARQUET=ON \
-    ARROW_S3=ON \
-    ARROW_SUBSTRAIT=ON \
+    ARROW_S3=OFF \
+    ARROW_SUBSTRAIT=OFF \
     ARROW_USE_ASAN=OFF \
     ARROW_USE_CCACHE=ON \
     ARROW_USE_MOLD=ON \
@@ -214,7 +215,7 @@ ENV absl_SOURCE=BUNDLED \
     ARROW_WITH_BROTLI=ON \
     ARROW_WITH_BZ2=ON \
     ARROW_WITH_LZ4=ON \
-    ARROW_WITH_OPENTELEMETRY=ON \
+    ARROW_WITH_OPENTELEMETRY=OFF \
     ARROW_WITH_SNAPPY=ON \
     ARROW_WITH_ZLIB=ON \
     ARROW_WITH_ZSTD=ON \

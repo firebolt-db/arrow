@@ -58,22 +58,25 @@ RUN /arrow/ci/scripts/install_azurite.sh
 COPY ci/scripts/install_sccache.sh /arrow/ci/scripts/
 RUN /arrow/ci/scripts/install_sccache.sh unknown-linux-musl /usr/local/bin
 
-ENV ARROW_ACERO=ON \
-    ARROW_AZURE=ON \
+# Firebolt: trimmed feature set (cpp parquet/orc focus); the rest disabled.
+ENV ARROW_ACERO=OFF \
+    ARROW_AZURE=OFF \
     ARROW_BUILD_TESTS=ON \
-    ARROW_DATASET=ON \
+    ARROW_DATASET=OFF \
     ARROW_DEPENDENCY_SOURCE=CONDA \
-    ARROW_FLIGHT=ON \
-    ARROW_FLIGHT_SQL=ON \
-    ARROW_GANDIVA=ON \
-    ARROW_GCS=ON \
+    ARROW_FLIGHT=OFF \
+    ARROW_FLIGHT_SQL=OFF \
+    ARROW_GANDIVA=OFF \
+    ARROW_GCS=OFF \
+    ARROW_HDFS=OFF \
     ARROW_HOME=$CONDA_PREFIX \
     ARROW_JEMALLOC=ON \
+    ARROW_MIMALLOC=OFF \
     ARROW_ORC=ON \
     ARROW_PARQUET=ON \
-    ARROW_S3=ON \
-    ARROW_S3_MODULE=ON \
-    ARROW_SUBSTRAIT=ON \
+    ARROW_S3=OFF \
+    ARROW_S3_MODULE=OFF \
+    ARROW_SUBSTRAIT=OFF \
     ARROW_USE_CCACHE=ON \
     ARROW_USE_MOLD=ON \
     ARROW_WITH_BROTLI=ON \
@@ -84,7 +87,8 @@ ENV ARROW_ACERO=ON \
     ARROW_WITH_SNAPPY=ON \
     ARROW_WITH_ZLIB=ON \
     ARROW_WITH_ZSTD=ON \
+    CMAKE_CXX_STANDARD=20 \
     GTest_SOURCE=BUNDLED \
-    PARQUET_BUILD_EXAMPLES=ON \
-    PARQUET_BUILD_EXECUTABLES=ON \
+    PARQUET_BUILD_EXAMPLES=OFF \
+    PARQUET_BUILD_EXECUTABLES=OFF \
     PARQUET_HOME=$CONDA_PREFIX
