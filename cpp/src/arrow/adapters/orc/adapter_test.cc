@@ -685,8 +685,8 @@ class TestORCWriterTrivialNoConversion : public ::testing::Test {
          field("int32", int32()), field("int64", int64()), field("float", float32()),
          field("double", float64()), field("decimal128nz", decimal128(25, 6)),
          field("decimal128z", decimal128(32, 0)), field("date32", date32()),
-         field("ts3", timestamp(TimeUnit::NANO)),
-         field("ts4", timestamp(TimeUnit::NANO, "UTC")), field("string", utf8()),
+         field("ts3", timestamp(TimeUnit::MICRO)),
+         field("ts4", timestamp(TimeUnit::MICRO, "UTC")), field("string", utf8()),
          field("binary", binary()),
          field("struct", struct_({field("a", utf8()), field("b", int64())})),
          field("list", list(int32())),
@@ -725,8 +725,8 @@ TEST_F(TestORCWriterTrivialNoConversion, writeFilledChunkAndSelectField) {
       field("struct", struct_({field("a", utf8()), field("b", int64())})),
       field("double", float64()),
       field("date32", date32()),
-      field("ts3", timestamp(TimeUnit::NANO)),
-      field("ts4", timestamp(TimeUnit::NANO), "UTC"),
+      field("ts3", timestamp(TimeUnit::MICRO)),
+      field("ts4", timestamp(TimeUnit::MICRO), "UTC"),
       field("string", utf8()),
       field("binary", binary()),
   });
@@ -759,9 +759,9 @@ class TestORCWriterTrivialWithConversion : public ::testing::Test {
          field("large_list", large_list(int32())),
          field("fixed_size_list", fixed_size_list(int32(), 3))}),
     output_schema = schema(
-        {field("date64", timestamp(TimeUnit::NANO)),
-         field("ts0", timestamp(TimeUnit::NANO)), field("ts1", timestamp(TimeUnit::NANO)),
-         field("ts2", timestamp(TimeUnit::NANO)), field("large_string", utf8()),
+        {field("date64", timestamp(TimeUnit::MICRO)),
+         field("ts0", timestamp(TimeUnit::MICRO)), field("ts1", timestamp(TimeUnit::MICRO)),
+         field("ts2", timestamp(TimeUnit::MICRO)), field("large_string", utf8()),
          field("large_binary", binary()), field("fixed_size_binary0", binary()),
          field("fixed_size_binary", binary()), field("large_list", list(int32())),
          field("fixed_size_list", list(int32()))});
@@ -808,7 +808,7 @@ class TestORCWriterNoConversion : public ::testing::Test {
          field("int32", int32()), field("int64", int64()), field("float", float32()),
          field("double", float64()), field("date32", date32()),
          field("decimal64", decimal128(18, 4)), field("decimal64z", decimal128(18, 0)),
-         field("ts3", timestamp(TimeUnit::NANO)), field("string", utf8()),
+         field("ts3", timestamp(TimeUnit::MICRO)), field("string", utf8()),
          field("binary", binary())});
   }
 
@@ -838,9 +838,9 @@ class TestORCWriterWithConversion : public ::testing::Test {
          field("fixed_size_binary0", fixed_size_binary(0)),
          field("fixed_size_binary", fixed_size_binary(5))}),
     output_schema = schema(
-        {field("date64", timestamp(TimeUnit::NANO)),
-         field("ts0", timestamp(TimeUnit::NANO)), field("ts1", timestamp(TimeUnit::NANO)),
-         field("ts2", timestamp(TimeUnit::NANO)), field("large_string", utf8()),
+        {field("date64", timestamp(TimeUnit::MICRO)),
+         field("ts0", timestamp(TimeUnit::MICRO)), field("ts1", timestamp(TimeUnit::MICRO)),
+         field("ts2", timestamp(TimeUnit::MICRO)), field("large_string", utf8()),
          field("large_binary", binary()), field("fixed_size_binary0", binary()),
          field("fixed_size_binary", binary())});
   }
@@ -899,7 +899,7 @@ TEST_F(TestORCWriterSingleArray, WriteStructOfStruct) {
       field("int32", int32()),
       field("int64", int64()),
       field("date32", date32()),
-      field("ts3", timestamp(TimeUnit::NANO)),
+      field("ts3", timestamp(TimeUnit::MICRO)),
       field("string", utf8()),
       field("binary", binary())};
   const int64_t num_rows = 1234;

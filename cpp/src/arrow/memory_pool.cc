@@ -731,6 +731,8 @@ static struct GlobalState {
 
 MemoryPool* system_memory_pool() { return global_state.system_memory_pool(); }
 
+MemoryPool* firebolt_memory_pool() { return global_state.firebolt_memory_pool(); }
+
 Status jemalloc_memory_pool(MemoryPool** out) {
 #ifdef ARROW_JEMALLOC
   *out = global_state.jemalloc_memory_pool();

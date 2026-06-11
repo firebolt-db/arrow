@@ -290,6 +290,11 @@ class ARROW_EXPORT CappedMemoryPool : public MemoryPool {
 /// \brief Return a process-wide memory pool based on the system allocator.
 ARROW_EXPORT MemoryPool* system_memory_pool();
 
+/// \brief Return the process-wide Firebolt memory pool.
+///
+/// This is the default backend in this fork (see default_memory_pool()).
+ARROW_EXPORT MemoryPool* firebolt_memory_pool();
+
 /// \brief Return a process-wide memory pool based on jemalloc.
 ///
 /// May return NotImplemented if jemalloc is not available.

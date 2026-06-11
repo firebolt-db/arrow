@@ -94,7 +94,8 @@ INSTANTIATE_TYPED_TEST_SUITE_P(Mimalloc, TestMemoryPool, MimallocMemoryPoolFacto
 TEST(DefaultMemoryPool, Identity) {
   // The default memory pool is pointer-identical to one of the backend-specific pools.
   MemoryPool* pool = default_memory_pool();
-  std::vector<MemoryPool*> specific_pools = {system_memory_pool()};
+  std::vector<MemoryPool*> specific_pools = {firebolt_memory_pool(),
+                                             system_memory_pool()};
 #ifdef ARROW_JEMALLOC
   specific_pools.push_back(nullptr);
   ASSERT_OK(jemalloc_memory_pool(&specific_pools.back()));
