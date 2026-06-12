@@ -999,8 +999,15 @@ class DictDecoderImpl : public TypedDecoderImpl<Type>, public DictDecoder<Type> 
     return Status::Invalid("Index not in dictionary bounds");
   }
 
+  static constexpr int kMaxDictionaryValues = 64 * 1024 * 1024;
+
   inline void DecodeDict(TypedDecoder<Type>* dictionary) {
-    dictionary_length_ = static_cast<int32_t>(dictionary->values_left());
+    const auto raw_length = dictionary->values_left();
+    if (raw_length < 0 || raw_length > kMaxDictionaryValues) {
+      throw ParquetException("Parquet dictionary value count out of bounds: " +
+                             std::to_string(raw_length));
+    }
+    dictionary_length_ = static_cast<int32_t>(raw_length);
     PARQUET_THROW_NOT_OK(
         dictionary_->Resize(static_cast<int64_t>(dictionary_length_) * sizeof(T),
                             /*shrink_to_fit=*/false));
@@ -1690,6 +1697,8 @@ class DeltaLengthByteArrayDecoder : public TypedDecoderImpl<ByteArrayType> {
  public:
   using Base = TypedDecoderImpl<ByteArrayType>;
 
+  static constexpr int kMaxByteArrayLengthValues = 64 * 1024 * 1024;
+
   explicit DeltaLengthByteArrayDecoder(const ColumnDescriptor* descr,
                                        MemoryPool* pool = ::arrow::default_memory_pool())
       : Base(descr, Encoding::DELTA_LENGTH_BYTE_ARRAY),
@@ -1766,6 +1775,11 @@ class DeltaLengthByteArrayDecoder : public TypedDecoderImpl<ByteArrayType> {
 
     // get the number of encoded lengths
     int num_length = len_decoder_.ValidValuesCount();
+    if (num_length < 0 || num_length > kMaxByteArrayLengthValues) {
+      throw ParquetException(
+          "DELTA_LENGTH_BYTE_ARRAY length count out of bounds: " +
+          std::to_string(num_length));
+    }
     PARQUET_THROW_NOT_OK(buffered_length_->Resize(num_length * sizeof(int32_t)));
 
     // call len_decoder_.Decode to decode all the lengths.
@@ -1967,6 +1981,12 @@ class DeltaByteArrayDecoderImpl : public TypedDecoderImpl<DType> {
 
     // get the number of encoded prefix lengths
     int num_prefix = prefix_len_decoder_.ValidValuesCount();
+    if (num_prefix < 0 ||
+        num_prefix > DeltaLengthByteArrayDecoder::kMaxByteArrayLengthValues) {
+      throw ParquetException(
+          "DELTA_BYTE_ARRAY prefix-length count out of bounds: " +
+          std::to_string(num_prefix));
+    }
     // call prefix_len_decoder_.Decode to decode all the prefix lengths.
     // all the prefix lengths are buffered in buffered_prefix_length_.
     PARQUET_THROW_NOT_OK(buffered_prefix_length_->Resize(num_prefix * sizeof(int32_t)));

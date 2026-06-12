@@ -2262,6 +2262,74 @@ TEST(DeltaLengthByteArrayEncoding, RejectBadBuffer) {
   ASSERT_THROW(decoder->DecodeArrow(3, 0, nullptr, 0, &acc), ParquetException);
 }
 
+namespace {
+// Write a VLQ unsigned varint into out.
+void AppendVlq(std::string& out, uint64_t v) {
+  while (v >= 0x80) {
+    out.push_back(static_cast<char>((v & 0x7f) | 0x80));
+    v >>= 7;
+  }
+  out.push_back(static_cast<char>(v));
+}
+
+// Build a DELTA_BINARY_PACKED header with the given total_value_count and
+// otherwise minimal-valid block parameters. Used to feed a hostile
+// total_value_count to the DELTA_*_BYTE_ARRAY length decoders.
+std::string DeltaBinaryPackedHeader(uint64_t total_value_count) {
+  std::string out;
+  AppendVlq(out, 128);                // values_per_block (must be multiple of 128, nonzero)
+  AppendVlq(out, 1);                  // mini_blocks_per_block (nonzero)
+  AppendVlq(out, total_value_count);  // total_value_count — the attacker-controlled field
+  AppendVlq(out, 0);                  // first_value (zigzag VLQ; sign doesn't matter here)
+  return out;
+}
+}  // namespace
+
+// Regression for unbounded num_length in DELTA_LENGTH_BYTE_ARRAY: a
+// total_value_count past kMaxByteArrayLengthValues would have driven
+// Resize(num_length * sizeof(int32_t)) into a multi-GiB allocation before
+// the bounds check landed.
+TEST(DeltaLengthByteArrayEncoding, RejectTooManyLengths) {
+  auto decoder = MakeTypedDecoder<ByteArrayType>(Encoding::DELTA_LENGTH_BYTE_ARRAY);
+  // 2^27 = 134 M lengths — comfortably past the 64 M cap, comfortably under
+  // INT32_MAX so the cast in ValidValuesCount() is well-defined.
+  const std::string header = DeltaBinaryPackedHeader(1ULL << 27);
+  ASSERT_THROW(
+      decoder->SetData(static_cast<int>(1ULL << 27),
+                       reinterpret_cast<const uint8_t*>(header.data()),
+                       static_cast<int>(header.size())),
+      ParquetException);
+}
+
+// Same regression for the prefix-length array of DELTA_BYTE_ARRAY (the
+// outer encoding wraps DELTA_BINARY_PACKED twice; both inner counts must
+// be bounded).
+TEST(DeltaByteArrayEncoding, RejectTooManyPrefixLengths) {
+  auto decoder = MakeTypedDecoder<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY);
+  const std::string header = DeltaBinaryPackedHeader(1ULL << 27);
+  ASSERT_THROW(
+      decoder->SetData(static_cast<int>(1ULL << 27),
+                       reinterpret_cast<const uint8_t*>(header.data()),
+                       static_cast<int>(header.size())),
+      ParquetException);
+}
+
+// Regression for unbounded dictionary_length_ in DictDecoderImpl: a
+// dictionary page declaring 2^27 entries would drive
+// Resize(dictionary_length_ * sizeof(T)) into multi-GiB allocation
+// (~4.5 GiB observed on a TPC-H seed mutation) before the bounds check.
+TEST(DictDecoderImpl, RejectTooManyDictionaryValues) {
+  // Build a PLAIN decoder whose num_values_ claims more entries than the
+  // buffer could possibly carry; SetDict picks this up via values_left().
+  auto plain = MakeTypedDecoder<ByteArrayType>(Encoding::PLAIN);
+  std::string empty;
+  plain->SetData(/*num_values=*/1 << 27,
+                 reinterpret_cast<const uint8_t*>(empty.data()),
+                 /*len=*/0);
+  auto dict_decoder = MakeDictDecoder<ByteArrayType>();
+  ASSERT_THROW(dict_decoder->SetDict(plain.get()), ParquetException);
+}
+
 TEST(DeltaLengthByteArrayEncodingAdHoc, ArrowBinaryDirectPut) {
   const int64_t size = 50;
   const int32_t min_length = 0;
