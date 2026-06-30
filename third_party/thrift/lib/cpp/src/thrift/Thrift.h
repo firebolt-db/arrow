@@ -61,6 +61,15 @@ public:
     return (ii_ != n_);
   }
 
+  // libc++ >= 19 implements std::map's range constructor with `first == last`; TEnumIterator only
+  // declared operator!=, so std::map<int,const char*>(TEnumIterator,...) failed to compile under the
+  // LLVM 22 toolchain ("invalid operands to binary expression"). Provide the matching ==.
+  bool operator==(const TEnumIterator& end) const {
+    THRIFT_UNUSED_VARIABLE(end);
+    assert(end.n_ == -1);
+    return (ii_ == n_);
+  }
+
   std::pair<int, const char*> operator*() const { return std::make_pair(enums_[ii_], names_[ii_]); }
 
 private:
