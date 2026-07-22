@@ -130,7 +130,7 @@ jobs:
       - name: Setup Python on hosted runner
         if: |
           matrix.runs-on == 'ubuntu-latest'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: 3
       - name: Setup Python on self-hosted runner
