@@ -73,10 +73,21 @@ protected:
   std::stack<int16_t> lastField_;
   int16_t lastFieldId_;
 
+  // Recursion-depth guard against stack overflow on deeply nested input; see
+  // TInputRecursionTracker in TProtocol.h. Input and output depths are tracked
+  // separately so one protocol can be used for both. The limit comes from the
+  // transport's TConfiguration (default DEFAULT_RECURSION_DEPTH = 64).
+  uint32_t input_recursion_depth_;
+  uint32_t output_recursion_depth_;
+  uint32_t recursion_limit_;
+
 public:
   TCompactProtocolT(std::shared_ptr<Transport_> trans)
     : trans_(trans.get()),
       lastFieldId_(0),
+      input_recursion_depth_(0),
+      output_recursion_depth_(0),
+      recursion_limit_(trans->getConfiguration()->getRecursionLimit()),
       string_limit_(0),
       string_buf_(nullptr),
       string_buf_size_(0),
@@ -90,6 +101,9 @@ public:
                     int32_t container_limit)
     : trans_(trans.get()),
       lastFieldId_(0),
+      input_recursion_depth_(0),
+      output_recursion_depth_(0),
+      recursion_limit_(trans->getConfiguration()->getRecursionLimit()),
       string_limit_(string_limit),
       string_buf_(nullptr),
       string_buf_size_(0),
@@ -99,6 +113,23 @@ public:
   }
 
   ~TCompactProtocolT() { free(string_buf_); }
+
+  // Recursion-depth tracking, driven by TInputRecursionTracker /
+  // TOutputRecursionTracker (TProtocol.h). Throws once the configured limit is
+  // exceeded, before the C++ stack overflows.
+  void incrementInputRecursionDepth() {
+    if (recursion_limit_ < ++input_recursion_depth_) {
+      throw TProtocolException(TProtocolException::DEPTH_LIMIT);
+    }
+  }
+  void decrementInputRecursionDepth() { --input_recursion_depth_; }
+
+  void incrementOutputRecursionDepth() {
+    if (recursion_limit_ < ++output_recursion_depth_) {
+      throw TProtocolException(TProtocolException::DEPTH_LIMIT);
+    }
+  }
+  void decrementOutputRecursionDepth() { --output_recursion_depth_; }
 
   /**
    * Writing functions

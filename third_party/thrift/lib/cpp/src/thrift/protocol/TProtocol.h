@@ -167,24 +167,28 @@ namespace protocol {
 
 using apache::thrift::transport::TTransport;
 
-// Firebolt: no-op recursion trackers.  The full Apache Thrift versions guard
-// against stack overflow from deeply nested structures via TProtocol
-// recursion-depth counters, which this minimal vendored copy omits.  The
-// generated parquet code (parquet_types.tcc) instantiates these at the top of
-// each read()/write(); we provide no-op stand-ins, templated on the protocol
-// type, so that generated code compiles unchanged against the bare-bones
-// transport without requiring the recursion-depth machinery.
+// RAII recursion-depth guards against stack overflow from deeply nested
+// structures in untrusted input (e.g. a malicious Parquet footer). The
+// generated parquet code (parquet_types.tcc) constructs one at the top of each
+// read()/write(), and skip() constructs one per level; the ctor increments and
+// the dtor decrements a depth counter on the protocol, throwing DEPTH_LIMIT
+// once the configured limit is exceeded. Templated on the protocol type since
+// this minimal vendored copy has no common TProtocol base class.
+template <typename Protocol_>
 struct TInputRecursionTracker {
-  template <typename Protocol_>
-  explicit TInputRecursionTracker(Protocol_&) {}
-  // User-declared destructor so the generated code's `tracker` locals are not
-  // flagged as unused (RAII types with non-trivial destructors are exempt).
-  ~TInputRecursionTracker() {}
+  Protocol_& prot_;
+  explicit TInputRecursionTracker(Protocol_& prot) : prot_(prot) {
+    prot_.incrementInputRecursionDepth();
+  }
+  ~TInputRecursionTracker() { prot_.decrementInputRecursionDepth(); }
 };
+template <typename Protocol_>
 struct TOutputRecursionTracker {
-  template <typename Protocol_>
-  explicit TOutputRecursionTracker(Protocol_&) {}
-  ~TOutputRecursionTracker() {}
+  Protocol_& prot_;
+  explicit TOutputRecursionTracker(Protocol_& prot) : prot_(prot) {
+    prot_.incrementOutputRecursionDepth();
+  }
+  ~TOutputRecursionTracker() { prot_.decrementOutputRecursionDepth(); }
 };
 
 /**
@@ -194,6 +198,8 @@ struct TOutputRecursionTracker {
  */
 template <class Protocol_>
 uint32_t skip(Protocol_& prot, TType type) {
+  TInputRecursionTracker<Protocol_> tracker(prot);
+
   switch (type) {
   case T_BOOL: {
     bool boolv;
