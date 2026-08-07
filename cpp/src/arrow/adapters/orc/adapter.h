@@ -183,6 +183,16 @@ class ARROW_EXPORT ORCFileReader {
   /// \brief StripeInformation for each stripe.
   StripeInformation GetStripeInformation(int64_t stripe);
 
+  /// \brief Byte range of a stripe's footer, which is what names its streams.
+  ///
+  /// Reported from the file footer alone, so this reads nothing -- which is what lets a
+  /// caller doing its own I/O make the footer available before calling
+  /// GetStripeStreamRanges, which cannot answer without it.
+  ///
+  /// \param[in] stripe the stripe index
+  /// \return the byte range of the stripe footer
+  Result<io::ReadRange> GetStripeFooterRange(int64_t stripe);
+
   /// \brief Byte ranges of the data streams a read of `include_indices` will touch in
   ///        `stripe`, so that a caller doing its own I/O can fetch them up front.
   ///

@@ -247,6 +247,23 @@ class ORCFileReader::Impl {
     return stripes_[static_cast<size_t>(stripe)];
   }
 
+  Result<io::ReadRange> GetStripeFooterRange(int64_t stripe) {
+    if (stripe < 0 || static_cast<size_t>(stripe) >= stripes_.size()) {
+      return Status::Invalid("Out of bounds stripe: ", stripe);
+    }
+    io::ReadRange range{};
+    ORC_BEGIN_CATCH_NOT_OK
+    // Offsets and lengths come off the file footer; the stripe footer itself stays
+    // unread, which is the point -- the caller needs this to make it readable.
+    const std::unique_ptr<liborc::StripeInformation> info =
+        reader_->getStripe(static_cast<uint64_t>(stripe));
+    range.offset = static_cast<int64_t>(info->getOffset() + info->getIndexLength() +
+                                        info->getDataLength());
+    range.length = static_cast<int64_t>(info->getFooterLength());
+    ORC_END_CATCH_NOT_OK
+    return range;
+  }
+
   Result<std::vector<io::ReadRange>> GetStripeStreamRanges(
       int64_t stripe, const std::vector<int>& include_indices) {
     if (stripe < 0 || static_cast<size_t>(stripe) >= stripes_.size()) {
@@ -693,6 +710,10 @@ int64_t ORCFileReader::NumberOfRows() { return impl_->NumberOfRows(); }
 
 StripeInformation ORCFileReader::GetStripeInformation(int64_t stripe) {
   return impl_->GetStripeInformation(stripe);
+}
+
+Result<io::ReadRange> ORCFileReader::GetStripeFooterRange(int64_t stripe) {
+  return impl_->GetStripeFooterRange(stripe);
 }
 
 Result<std::vector<io::ReadRange>> ORCFileReader::GetStripeStreamRanges(
