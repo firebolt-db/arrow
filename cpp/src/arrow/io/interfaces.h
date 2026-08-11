@@ -360,8 +360,11 @@ class ARROW_EXPORT CordedRandomAccessFile : public CordedInputStream,
  public:
   virtual Result<CordedBuffer> ReadCordedAt(int64_t position, int64_t nbytes) = 0;
 
-  // Provide NotImplemented versions of the non-corded read functions
-  Result<int64_t> ReadAt(int64_t position, int64_t nbytes, void* out) final;
+  // Provide NotImplemented versions of the non-corded read functions.  The copying
+  // overload is overridable rather than final: the ORC adapter reaches a file only
+  // through liborc's InputStream::read, which copies into a caller-owned buffer and
+  // so cannot use ReadCordedAt.  Everything else stays on the corded path.
+  Result<int64_t> ReadAt(int64_t position, int64_t nbytes, void* out) override;
   Result<std::shared_ptr<Buffer>> ReadAt(int64_t position, int64_t nbytes) final;
 };
 

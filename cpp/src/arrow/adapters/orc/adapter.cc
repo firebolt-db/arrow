@@ -247,6 +247,73 @@ class ORCFileReader::Impl {
     return stripes_[static_cast<size_t>(stripe)];
   }
 
+  Result<io::ReadRange> GetStripeFooterRange(int64_t stripe) {
+    if (stripe < 0 || static_cast<size_t>(stripe) >= stripes_.size()) {
+      return Status::Invalid("Out of bounds stripe: ", stripe);
+    }
+    io::ReadRange range{};
+    ORC_BEGIN_CATCH_NOT_OK
+    // Offsets and lengths come off the file footer; the stripe footer itself stays
+    // unread, which is the point -- the caller needs this to make it readable.
+    const std::unique_ptr<liborc::StripeInformation> info =
+        reader_->getStripe(static_cast<uint64_t>(stripe));
+    range.offset = static_cast<int64_t>(info->getOffset() + info->getIndexLength() +
+                                        info->getDataLength());
+    range.length = static_cast<int64_t>(info->getFooterLength());
+    ORC_END_CATCH_NOT_OK
+    return range;
+  }
+
+  Result<std::vector<io::ReadRange>> GetStripeStreamRanges(
+      int64_t stripe, const std::vector<int>& include_indices) {
+    if (stripe < 0 || static_cast<size_t>(stripe) >= stripes_.size()) {
+      return Status::Invalid("Out of bounds stripe: ", stripe);
+    }
+
+    liborc::RowReaderOptions opts = DefaultRowReaderOptions();
+    if (!include_indices.empty()) {
+      RETURN_NOT_OK(SelectIndices(&opts, include_indices));
+    }
+
+    std::vector<io::ReadRange> ranges;
+
+    ORC_BEGIN_CATCH_NOT_OK
+    // Let liborc say which columns these options select, rather than reproducing the
+    // walk here: selection reaches beyond include_indices to their descendants and
+    // ancestors, and a second implementation of that could only drift from this one.
+    // Building the row reader parses no stripe -- it selects off the file footer, and
+    // the stripe is not opened until the first read.
+    const std::vector<bool> selected =
+        reader_->createRowReader(opts)->getSelectedColumns();
+
+    const std::unique_ptr<liborc::StripeInformation> stripe_info =
+        reader_->getStripe(static_cast<uint64_t>(stripe));
+
+    for (uint64_t i = 0; i < stripe_info->getNumberOfStreams(); ++i) {
+      const std::unique_ptr<liborc::StreamInformation> stream =
+          stripe_info->getStreamInformation(i);
+      const uint64_t column = stream->getColumnId();
+      if (column >= selected.size() || !selected[column]) {
+        continue;
+      }
+      switch (stream->getKind()) {
+        case liborc::StreamKind_PRESENT:
+        case liborc::StreamKind_DATA:
+        case liborc::StreamKind_LENGTH:
+        case liborc::StreamKind_DICTIONARY_DATA:
+        case liborc::StreamKind_SECONDARY:
+          ranges.push_back({static_cast<int64_t>(stream->getOffset()),
+                            static_cast<int64_t>(stream->getLength())});
+          break;
+        default:
+          break;
+      }
+    }
+    ORC_END_CATCH_NOT_OK
+
+    return ranges;
+  }
+
   FileVersion GetFileVersion() {
     liborc::FileVersion orc_file_version = reader_->getFormatVersion();
     return FileVersion(orc_file_version.getMajor(), orc_file_version.getMinor());
@@ -518,7 +585,14 @@ class ORCFileReader::Impl {
 
     ORC_BEGIN_CATCH_NOT_OK
     row_reader = reader_->createRowReader(opts);
-    row_reader->seekToRow(current_row_);
+    // Only seek when we are not already at the start of the selected stripe.  The row
+    // reader begins at the first row of its range anyway, but seekToRow loads the stripe
+    // index even for a zero-row seek -- and that pulls in the bloom filter streams
+    // alongside the row indexes, which can dwarf them and which nothing reads unless a
+    // search argument was set.
+    if (current_row_ != stripe_info.first_row_id) {
+      row_reader->seekToRow(current_row_);
+    }
     current_row_ = stripe_info.first_row_id + stripe_info.num_rows;
     ORC_END_CATCH_NOT_OK
 
@@ -636,6 +710,15 @@ int64_t ORCFileReader::NumberOfRows() { return impl_->NumberOfRows(); }
 
 StripeInformation ORCFileReader::GetStripeInformation(int64_t stripe) {
   return impl_->GetStripeInformation(stripe);
+}
+
+Result<io::ReadRange> ORCFileReader::GetStripeFooterRange(int64_t stripe) {
+  return impl_->GetStripeFooterRange(stripe);
+}
+
+Result<std::vector<io::ReadRange>> ORCFileReader::GetStripeStreamRanges(
+    int64_t stripe, const std::vector<int>& include_indices) {
+  return impl_->GetStripeStreamRanges(stripe, include_indices);
 }
 
 FileVersion ORCFileReader::GetFileVersion() { return impl_->GetFileVersion(); }

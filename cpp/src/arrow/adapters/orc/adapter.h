@@ -183,6 +183,41 @@ class ARROW_EXPORT ORCFileReader {
   /// \brief StripeInformation for each stripe.
   StripeInformation GetStripeInformation(int64_t stripe);
 
+  /// \brief Byte range of a stripe's footer, which is what names its streams.
+  ///
+  /// Reported from the file footer alone, so this reads nothing -- which is what lets a
+  /// caller doing its own I/O make the footer available before calling
+  /// GetStripeStreamRanges, which cannot answer without it.
+  ///
+  /// \param[in] stripe the stripe index
+  /// \return the byte range of the stripe footer
+  Result<io::ReadRange> GetStripeFooterRange(int64_t stripe);
+
+  /// \brief Byte ranges of the data streams a read of `include_indices` will touch in
+  ///        `stripe`, so that a caller doing its own I/O can fetch them up front.
+  ///
+  /// Covers the PRESENT, DATA, LENGTH, DICTIONARY_DATA and SECONDARY streams of every
+  /// column liborc selects.  Selection is wider than `include_indices`: it also takes in
+  /// their descendants and all of their ancestors, because an ancestor's PRESENT stream
+  /// carries the nullability of the struct holding the requested leaf.  The set is
+  /// obtained from liborc rather than recomputed here, so it cannot drift from what the
+  /// row reader goes on to read.
+  ///
+  /// Index streams (ROW_INDEX, BLOOM_FILTER*) are deliberately excluded: NextStripeReader
+  /// only loads them when it has to seek within the stripe or when a search argument was
+  /// set.  Neither applies to a caller reading a stripe from its first row.
+  ///
+  /// Requires the stripe footer to be readable, as it names the streams -- callers doing
+  /// their own I/O must have the range
+  /// `[offset + index_length + data_length, + footer_length)` available first, which
+  /// GetStripeInformation reports without reading anything.
+  ///
+  /// \param[in] stripe the stripe index
+  /// \param[in] include_indices the selected field indices, empty to select all
+  /// \return the byte ranges, in ascending offset order
+  Result<std::vector<io::ReadRange>> GetStripeStreamRanges(
+      int64_t stripe, const std::vector<int>& include_indices);
+
   /// \brief Get the format version of the file.
   ///         Currently known values are 0.11 and 0.12.
   ///
