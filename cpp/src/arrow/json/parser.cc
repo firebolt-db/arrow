@@ -827,7 +827,7 @@ class HandlerBase : public BlockParser,
     }
     auto struct_builder = Cast<kind>(builder_);
     absent_fields_stack_.Push(struct_builder->num_fields(), true);
-    StartNested();
+    RETURN_NOT_OK(StartNested());
     return struct_builder->Append();
   }
 
@@ -881,7 +881,7 @@ class HandlerBase : public BlockParser,
     if (ARROW_PREDICT_FALSE(builder_.kind != kind)) {
       return IllegallyChangedTo(kind);
     }
-    StartNested();
+    RETURN_NOT_OK(StartNested());
     // append to the list builder in EndArrayImpl
     builder_ = Cast<kind>(builder_)->value_builder();
     return Status::OK();
@@ -897,10 +897,20 @@ class HandlerBase : public BlockParser,
   /// helper method for StartArray and StartObject
   /// adds the current builder to a stack so its
   /// children can be visited and parsed.
-  void StartNested() {
+  ///
+  /// Rejects input nested deeper than kMaxNestingDepth. The RapidJSON parse itself is iterative
+  /// (kParseIterativeFlag) and cannot overflow, but the array/struct builders are finalized
+  /// recursively (RawArrayBuilder<kArray|kObject>::Finish / RawBuilderSet::Finish), so deeply
+  /// nested input would otherwise overflow the native stack. Guarding here — the single point where
+  /// built (non-skipped) nesting deepens for both objects and arrays — makes that unreachable.
+  Status StartNested() {
+    if (ARROW_PREDICT_FALSE(builder_stack_.size() >= kMaxNestingDepth)) {
+      return Status::Invalid("JSON nesting depth exceeds the maximum of ", kMaxNestingDepth);
+    }
     field_index_stack_.push_back(field_index_);
     field_index_ = -1;
     builder_stack_.push_back(builder_);
+    return Status::OK();
   }
 
   /// helper method for EndArray and EndObject
@@ -927,6 +937,11 @@ class HandlerBase : public BlockParser,
     }
     return scalar_values_builder_.ReserveData(size - available_storage);
   }
+
+  // Maximum object/array nesting depth accepted before StartNested() rejects the input, to keep
+  // the recursive builder finalization (RawArrayBuilder::Finish / RawBuilderSet::Finish) from
+  // overflowing the native stack on deeply nested JSON.
+  static constexpr size_t kMaxNestingDepth = 1000;
 
   Status status_;
   RawBuilderSet builder_set_;
