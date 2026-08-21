@@ -672,6 +672,16 @@ class HandlerBase : public BlockParser,
   ///
   /// @{
   bool Null() {
+    // A document whose root value is `null` reaches this with no enclosing object
+    // or array, so builder_stack_ is still empty and there is no parent builder to
+    // append to. The other scalar handlers reject a scalar root via the
+    // builder_.kind mismatch below, but this one dereferences the parent
+    // unconditionally, so guard it explicitly rather than reading off the front of
+    // the stack.
+    if (ARROW_PREDICT_FALSE(builder_stack_.empty())) {
+      status_ = IllegallyChangedTo(Kind::kNull);
+      return status_.ok();
+    }
     status_ = builder_set_.AppendNull(builder_stack_.back(), field_index_, builder_);
     return status_.ok();
   }
