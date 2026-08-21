@@ -308,6 +308,20 @@ TEST(BlockParser, FailOnInvalidEOF) {
               ::testing::StartsWith("JSON parse error: The document is empty"));
 }
 
+// A bare `null` root reaches Null() with an empty builder stack: there is no parent
+// builder to append to, unlike every other root-level scalar. Every handler inherits
+// HandlerBase::Null(), so this is not specific to the default InferType behavior.
+TEST(BlockParser, FailOnRootLevelNull) {
+  for (auto src : {"null", R"({"a":1}
+null)"}) {
+    auto options = ParseOptions::Defaults();
+    std::shared_ptr<Array> parsed;
+    auto status = ParseFromString(options, src, &parsed);
+    ASSERT_RAISES(Invalid, status);
+    EXPECT_THAT(status.message(), ::testing::HasSubstr("changed from object to null"));
+  }
+}
+
 TEST(BlockParser, AdHoc) {
   auto options = ParseOptions::Defaults();
   options.unexpected_field_behavior = UnexpectedFieldBehavior::InferType;
