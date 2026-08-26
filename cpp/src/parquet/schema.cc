@@ -544,6 +544,10 @@ void PrimitiveNode::ToParquet(void* opaque_element) const {
 // ----------------------------------------------------------------------
 // Schema converters
 
+// Deepest group nesting Unflatten will build before rejecting the schema. 1000 matches the JSON
+// reader's kMaxNestingDepth, so every untrusted-nesting path in the library fails at one number.
+static constexpr int kMaxSchemaNestingDepth = 1000;
+
 std::unique_ptr<Node> Unflatten(const format::SchemaElement* elements, int length) {
   if (elements[0].num_children == 0) {
     if (length == 1) {
@@ -560,7 +564,16 @@ std::unique_ptr<Node> Unflatten(const format::SchemaElement* elements, int lengt
 
   int pos = 0;
 
-  std::function<std::unique_ptr<Node>()> NextNode = [&]() {
+  std::function<std::unique_ptr<Node>(int)> NextNode = [&](int depth) {
+    // The schema is a flat list of elements whose num_children fields describe the tree, so a
+    // file can nest as deep as it has elements and this recursion runs one native frame per
+    // level. Without a cap, a schema a few tens of thousands deep overflows the thread stack
+    // before any consumer sees the file -- an unauthenticated remote crash on any read of an
+    // attacker-supplied Parquet file. Mirrors the JSON reader's kMaxNestingDepth guard.
+    if (depth > kMaxSchemaNestingDepth) {
+      throw ParquetException("Parquet schema nesting depth exceeds the maximum of " +
+                             std::to_string(kMaxSchemaNestingDepth));
+    }
     if (pos == length) {
       throw ParquetException("Malformed schema: not enough elements");
     }
@@ -574,13 +587,13 @@ std::unique_ptr<Node> Unflatten(const format::SchemaElement* elements, int lengt
       // Group node (may have 0 children, but cannot have a type)
       NodeVector fields;
       for (int i = 0; i < element.num_children; ++i) {
-        std::unique_ptr<Node> field = NextNode();
+        std::unique_ptr<Node> field = NextNode(depth + 1);
         fields.push_back(NodePtr(field.release()));
       }
       return GroupNode::FromParquet(opaque_element, std::move(fields));
     }
   };
-  return NextNode();
+  return NextNode(0);
 }
 
 std::shared_ptr<SchemaDescriptor> FromParquet(const std::vector<SchemaElement>& schema) {
