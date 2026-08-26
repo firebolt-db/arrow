@@ -478,6 +478,11 @@ struct ValidateArrayImpl {
       return Status::Invalid("Array length is negative");
     }
 
+    // Shrinks length_plus_offset, so every buffer-size check below passes vacuously.
+    if (data.offset < 0) {
+      return Status::Invalid("Array offset is negative");
+    }
+
     if (layout.variadic_spec) {
       if (data.buffers.size() < layout.buffers.size()) {
         return Status::Invalid("Expected at least ", layout.buffers.size(),
