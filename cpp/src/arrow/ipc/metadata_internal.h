@@ -126,12 +126,9 @@ inline std::string StringFromFlatbuffers(const flatbuffers::String* s) {
 // dictionary-encoded fields to a DictionaryMemo instance. May be
 // expensive for very large schemas if you are only interested in a
 // few fields
-//
-// Rejects schemas nested deeper than max_recursion_depth: reconstruction is recursive, and the
-// flatbuffer verifier's own limit bounds the serialized graph rather than the decoded type levels.
 ARROW_EXPORT
-Status GetSchema(const void* opaque_schema, int max_recursion_depth,
-                 DictionaryMemo* dictionary_memo, std::shared_ptr<Schema>* out);
+Status GetSchema(const void* opaque_schema, DictionaryMemo* dictionary_memo,
+                 std::shared_ptr<Schema>* out);
 
 ARROW_EXPORT
 Status GetTensorMetadata(const Buffer& metadata, std::shared_ptr<DataType>* type,
