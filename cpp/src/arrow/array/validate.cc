@@ -107,7 +107,7 @@ struct BoundsChecker {
 // Recursion limit for the nested walk below. An array can nest as deep as its type does, and
 // every level costs one native frame, so an untrusted array has to be rejected before the stack
 // runs out. Matches parquet's kMaxSchemaNestingDepth and the JSON reader's limit.
-static constexpr int kMaxValidationNestingDepth = 1000;
+static constexpr int kMaxValidationNestingDepth = 256;
 
 struct ValidateArrayImpl {
   const ArrayData& data;

@@ -544,9 +544,10 @@ void PrimitiveNode::ToParquet(void* opaque_element) const {
 // ----------------------------------------------------------------------
 // Schema converters
 
-// Deepest group nesting Unflatten will build before rejecting the schema. 1000 matches the JSON
-// reader's kMaxNestingDepth, so every untrusted-nesting path in the library fails at one number.
-static constexpr int kMaxSchemaNestingDepth = 1000;
+// Deepest group nesting Unflatten will build before rejecting the schema. Every untrusted-nesting
+// path in the library shares this number; 256 is far past any real schema and leaves an order of
+// magnitude of headroom under the shallowest measured overflow (~1650 frames on a 2 MB stack).
+static constexpr int kMaxSchemaNestingDepth = 256;
 
 std::unique_ptr<Node> Unflatten(const format::SchemaElement* elements, int length) {
   if (elements[0].num_children == 0) {

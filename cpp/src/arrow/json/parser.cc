@@ -951,7 +951,7 @@ class HandlerBase : public BlockParser,
   // Maximum object/array nesting depth accepted before StartNested() rejects the input, to keep
   // the recursive builder finalization (RawArrayBuilder::Finish / RawBuilderSet::Finish) from
   // overflowing the native stack on deeply nested JSON.
-  static constexpr size_t kMaxNestingDepth = 1000;
+  static constexpr size_t kMaxNestingDepth = 256;
 
   Status status_;
   RawBuilderSet builder_set_;
