@@ -104,14 +104,22 @@ struct BoundsChecker {
   }
 };
 
+// Recursion limit for the nested walk below. An array can nest as deep as its type does, and
+// every level costs one native frame, so an untrusted array has to be rejected before the stack
+// runs out. Matches parquet's kMaxSchemaNestingDepth and the JSON reader's limit.
+static constexpr int kMaxValidationNestingDepth = 1000;
+
 struct ValidateArrayImpl {
   const ArrayData& data;
   const bool full_validation;
+  const int depth = 0;
 
   Status Validate() {
     if (data.type == nullptr) {
       return Status::Invalid("Array type is absent");
     }
+
+    RETURN_NOT_OK(CheckNestingDepth());
 
     // XXX should we unpack extension types here?
 
@@ -454,8 +462,19 @@ struct ValidateArrayImpl {
   }
 
   Status Visit(const ExtensionType& type) {
-    // Visit storage
-    return ValidateWithType(*type.storage_type());
+    // Visit storage. It counts as a level: extension types chain, and unlike the other nested
+    // types this hop keeps the same ArrayData, so nothing else would increment the depth.
+    ValidateArrayImpl storage_impl{data, full_validation, depth + 1};
+    RETURN_NOT_OK(storage_impl.CheckNestingDepth());
+    return storage_impl.ValidateWithType(*type.storage_type());
+  }
+
+  Status CheckNestingDepth() const {
+    if (depth > kMaxValidationNestingDepth) {
+      return Status::Invalid("Array nesting depth exceeds the maximum of ",
+                             kMaxValidationNestingDepth);
+    }
+    return Status::OK();
   }
 
  private:
@@ -466,7 +485,7 @@ struct ValidateArrayImpl {
   }
 
   Status RecurseInto(const ArrayData& related_data) {
-    ValidateArrayImpl impl{related_data, full_validation};
+    ValidateArrayImpl impl{related_data, full_validation, depth + 1};
     return impl.Validate();
   }
 
