@@ -862,7 +862,15 @@ class FieldToFlatbufferVisitor {
 };
 
 Status FieldFromFlatbuffer(const flatbuf::Field* field, FieldPosition field_pos,
-                           DictionaryMemo* dictionary_memo, std::shared_ptr<Field>* out) {
+                           int max_recursion_depth, DictionaryMemo* dictionary_memo,
+                           std::shared_ptr<Field>* out) {
+  // Checked on the way down: the flatbuffer verifier bounds the serialized graph, not the number
+  // of type levels it decodes to, and each level here costs a native frame.
+  if (field_pos.depth() > max_recursion_depth) {
+    return Status::Invalid("Schema nesting depth exceeds the maximum of ",
+                           max_recursion_depth);
+  }
+
   std::shared_ptr<DataType> type;
 
   std::shared_ptr<KeyValueMetadata> metadata;
@@ -877,7 +885,8 @@ Status FieldFromFlatbuffer(const flatbuf::Field* field, FieldPosition field_pos,
     child_fields.resize(children->size());
     for (int i = 0; i < static_cast<int>(children->size()); ++i) {
       RETURN_NOT_OK(FieldFromFlatbuffer(children->Get(i), field_pos.child(i),
-                                        dictionary_memo, &child_fields[i]));
+                                        max_recursion_depth, dictionary_memo,
+                                        &child_fields[i]));
     }
   }
 
@@ -1443,8 +1452,8 @@ Status WriteFileFooter(const Schema& schema, const std::vector<FileBlock>& dicti
 
 // ----------------------------------------------------------------------
 
-Status GetSchema(const void* opaque_schema, DictionaryMemo* dictionary_memo,
-                 std::shared_ptr<Schema>* out) {
+Status GetSchema(const void* opaque_schema, int max_recursion_depth,
+                 DictionaryMemo* dictionary_memo, std::shared_ptr<Schema>* out) {
   auto schema = static_cast<const flatbuf::Schema*>(opaque_schema);
   CHECK_FLATBUFFERS_NOT_NULL(schema, "schema");
   CHECK_FLATBUFFERS_NOT_NULL(schema->fields(), "Schema.fields");
@@ -1457,8 +1466,8 @@ Status GetSchema(const void* opaque_schema, DictionaryMemo* dictionary_memo,
     const flatbuf::Field* field = schema->fields()->Get(i);
     // XXX I don't think this check is necessary (AP)
     CHECK_FLATBUFFERS_NOT_NULL(field, "DictionaryEncoding.indexType");
-    RETURN_NOT_OK(
-        FieldFromFlatbuffer(field, field_pos.child(i), dictionary_memo, &fields[i]));
+    RETURN_NOT_OK(FieldFromFlatbuffer(field, field_pos.child(i), max_recursion_depth,
+                                      dictionary_memo, &fields[i]));
   }
 
   std::shared_ptr<KeyValueMetadata> metadata;

@@ -881,7 +881,8 @@ Status UnpackSchemaMessage(const void* opaque_schema, const IpcReadOptions& opti
                            std::shared_ptr<Schema>* schema,
                            std::shared_ptr<Schema>* out_schema,
                            std::vector<bool>* field_inclusion_mask, bool* swap_endian) {
-  RETURN_NOT_OK(internal::GetSchema(opaque_schema, dictionary_memo, schema));
+  RETURN_NOT_OK(internal::GetSchema(opaque_schema, options.max_recursion_depth,
+                                    dictionary_memo, schema));
 
   // If we are selecting only certain fields, populate the inclusion mask now
   // for fast lookups
@@ -2281,7 +2282,8 @@ Result<std::shared_ptr<Schema>> ReadSchema(io::InputStream* stream,
 Result<std::shared_ptr<Schema>> ReadSchema(const Message& message,
                                            DictionaryMemo* dictionary_memo) {
   std::shared_ptr<Schema> result;
-  RETURN_NOT_OK(internal::GetSchema(message.header(), dictionary_memo, &result));
+  RETURN_NOT_OK(internal::GetSchema(message.header(), kMaxNestingDepth, dictionary_memo,
+                                    &result));
   return result;
 }
 

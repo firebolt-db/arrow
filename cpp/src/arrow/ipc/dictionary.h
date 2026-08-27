@@ -41,6 +41,9 @@ class FieldPosition {
 
   FieldPosition child(int index) const { return {this, index}; }
 
+  // Nesting level, counting the schema root as 0 and its top-level fields as 1.
+  int depth() const { return depth_; }
+
   std::vector<int> path() const {
     std::vector<int> path(depth_);
     const FieldPosition* cur = this;
