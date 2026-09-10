@@ -19,6 +19,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -158,6 +160,22 @@ class ZSTDCompressor : public Compressor {
 
 class ZSTDCodec : public Codec {
  public:
+  Result<std::optional<int64_t>> DecompressedLength(int64_t input_len,
+                                                    const uint8_t* input) override {
+    const unsigned long long size = ZSTD_getFrameContentSize(input, static_cast<size_t>(input_len));
+    if (size == ZSTD_CONTENTSIZE_ERROR) {
+      // Not a readable zstd frame header at all, so nothing can decompress from it.
+      return Status::IOError("ZSTD decompression failed: not a valid frame");
+    }
+    if (size == ZSTD_CONTENTSIZE_UNKNOWN) {
+      return std::nullopt;  // a valid frame whose writer chose not to record the size
+    }
+    if (size > static_cast<unsigned long long>(std::numeric_limits<int64_t>::max())) {
+      return Status::IOError("ZSTD frame declares an unrepresentable decompressed size");
+    }
+    return static_cast<int64_t>(size);
+  }
+
   explicit ZSTDCodec(int compression_level,
                      std::vector<std::pair<int, int>> compression_context_params,
                      std::vector<std::pair<int, int>> decompression_context_params)

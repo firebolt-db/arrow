@@ -23,6 +23,7 @@
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -463,7 +464,6 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
     if (compressed_len < 0 || uncompressed_len < 0) {
       throw ParquetException("Invalid page header");
     }
-
     EncodedStatistics data_page_statistics;
     if (ShouldSkipPage(&data_page_statistics)) {
       PARQUET_THROW_NOT_OK(stream_->Advance(compressed_len));
@@ -639,6 +639,36 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
   }
   if (compressed_len < levels_byte_len || uncompressed_len < levels_byte_len) {
     throw ParquetException("Invalid page header");
+  }
+
+  // The header's uncompressed size is the file's word for it, and it sizes the buffer below --
+  // a 1358-byte page was enough to ask for 2 GiB. Ask the data itself instead: snappy records its
+  // decompressed length in a varint prefix and zstd in the frame header.
+  //
+  // The error case is the one that matters. A page whose compressed bytes cannot even be parsed
+  // as the codec they claim to be will not decompress, so there is no reason to allocate for it
+  // first -- and that is exactly the shape of the attack, five bytes of noise declaring 2 GiB.
+  // Formats that record no length (lz4 raw blocks, gzip) return nullopt and are left alone, as is
+  // the corded path, whose bytes are not contiguous to hand over.
+  if (plain_buffer != nullptr) {
+    const int64_t bytes_to_decompress = compressed_len - levels_byte_len;
+    if (bytes_to_decompress > 0) {
+      auto stated = decompressor_->DecompressedLength(
+          bytes_to_decompress, plain_buffer->data() + levels_byte_len);
+      if (!stated.ok()) {
+        throw ParquetException("Page data is not readable as " +
+                               ::arrow::util::Codec::GetCodecAsString(
+                                   decompressor_->compression_type()) +
+                               ": " + stated.status().message());
+      }
+      const int64_t claimed = static_cast<int64_t>(uncompressed_len) - levels_byte_len;
+      if (stated->has_value() && **stated != claimed) {
+        std::stringstream ss;
+        ss << "Page header declares an uncompressed size of " << claimed
+           << " bytes, but the compressed data states " << **stated;
+        throw ParquetException(ss.str());
+      }
+    }
   }
 
   // Grow the uncompressed buffer if we need to.

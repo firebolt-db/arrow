@@ -230,6 +230,28 @@ class ARROW_EXPORT Codec {
 
   virtual int64_t MaxCompressedLen(int64_t input_len, const uint8_t* input) = 0;
 
+  /// \brief The decompressed length the compressed data states for itself
+  ///
+  /// Some formats record it -- snappy in a varint prefix, zstd in the frame header -- so a caller
+  /// sizing a buffer can use what the data says rather than a length handed to it out of band.
+  ///
+  /// Three outcomes, and they mean different things:
+  ///   - a value: the data states this length
+  ///   - nullopt: this format does not record one (lz4 raw blocks, gzip), or this writer left it
+  ///     unset. The caller learns nothing and must carry on as before.
+  ///   - an error: the format does record one, and this input is too damaged to read it. The
+  ///     input cannot decompress, so a caller sizing a buffer for it should stop rather than
+  ///     allocate on the strength of a number from elsewhere.
+  ///
+  /// A returned length is read from attacker-controllable bytes. It bounds what the caller should
+  /// be willing to allocate; it does not promise the data decompresses, which Decompress checks.
+  virtual Result<std::optional<int64_t>> DecompressedLength(int64_t input_len,
+                                                            const uint8_t* input) {
+    ARROW_UNUSED(input_len);
+    ARROW_UNUSED(input);
+    return std::nullopt;
+  }
+
   /// \brief Create a streaming compressor instance
   virtual Result<std::shared_ptr<Compressor>> MakeCompressor() = 0;
 

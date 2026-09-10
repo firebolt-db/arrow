@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include <snappy-sinksource.h>
 #include <snappy.h>
@@ -44,6 +45,17 @@ namespace {
 
 class SnappyCodec : public Codec {
  public:
+  Result<std::optional<int64_t>> DecompressedLength(int64_t input_len,
+                                                    const uint8_t* input) override {
+    size_t decompressed_size = 0;
+    if (!snappy::GetUncompressedLength(reinterpret_cast<const char*>(input),
+                                       static_cast<size_t>(input_len), &decompressed_size)) {
+      // Snappy always records the length, so failing to read it means the input is not snappy.
+      return Status::IOError("Corrupt snappy compressed data.");
+    }
+    return static_cast<int64_t>(decompressed_size);
+  }
+
   Result<int64_t> Decompress(int64_t input_len, const uint8_t* input,
                              int64_t output_buffer_len, uint8_t* output_buffer) override {
     size_t decompressed_size;
