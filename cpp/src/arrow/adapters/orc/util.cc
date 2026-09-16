@@ -1197,13 +1197,23 @@ Result<std::shared_ptr<DataType>> GetArrowType(const liborc::Type* type) {
     case liborc::DATE:
       return date32();
     case liborc::DECIMAL: {
-      const int precision = static_cast<int>(type->getPrecision());
-      const int scale = static_cast<int>(type->getScale());
+      // decimal128() aborts via ARROW_CHECK when precision is out of [1, 38], so validate
+      // the untrusted footer values (as raw uint64, before the narrowing cast) first.
+      const uint64_t precision = type->getPrecision();
+      const uint64_t scale = type->getScale();
       if (precision == 0) {
         // In HIVE 0.11/0.12 precision is set as 0, but means max precision
         return decimal128(38, 6);
       }
-      return decimal128(precision, scale);
+      if (precision > static_cast<uint64_t>(Decimal128Type::kMaxPrecision)) {
+        return Status::TypeError("Invalid ORC decimal precision ", precision,
+                                 ": must be in [1, ", Decimal128Type::kMaxPrecision, "]");
+      }
+      if (scale > precision) {
+        return Status::TypeError("Invalid ORC decimal scale ", scale,
+                                 ": must be in [0, precision=", precision, "]");
+      }
+      return decimal128(static_cast<int>(precision), static_cast<int>(scale));
     }
     case liborc::LIST: {
       if (subtype_count != 1) {

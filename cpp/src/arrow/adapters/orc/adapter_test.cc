@@ -658,6 +658,37 @@ TEST(TestAdapterReadWrite, ThrowWhenTZDBUnavaiable) {
               Raises(StatusCode::Invalid, testing::HasSubstr(expect_str)));
 }
 
+// An out-of-range DECIMAL precision/scale from a malformed footer must return an error
+// Status, not abort the process via decimal128()'s ARROW_CHECK.
+TEST(TestAdapterRead, GetArrowTypeRejectsOutOfRangeDecimal) {
+  namespace orc_adapter = adapters::orc;
+
+  EXPECT_THAT(orc_adapter::GetArrowType(
+                  liborc::createDecimalType(Decimal128Type::kMaxPrecision + 1, 2).get()),
+              Raises(StatusCode::TypeError, testing::HasSubstr("decimal precision")));
+  // Above INT_MAX: rejected on the raw uint64, not wrapped into range by static_cast<int>.
+  EXPECT_THAT(
+      orc_adapter::GetArrowType(liborc::createDecimalType(uint64_t{1} << 40, 2).get()),
+      Raises(StatusCode::TypeError, testing::HasSubstr("decimal precision")));
+  EXPECT_THAT(orc_adapter::GetArrowType(liborc::createDecimalType(10, 20).get()),
+              Raises(StatusCode::TypeError, testing::HasSubstr("decimal scale")));
+
+  // precision == 0 is the legacy HIVE 0.11/0.12 "max precision" sentinel.
+  ASSERT_OK_AND_ASSIGN(auto hive_sentinel,
+                       orc_adapter::GetArrowType(liborc::createDecimalType(0, 0).get()));
+  AssertTypeEqual(*decimal128(38, 6), *hive_sentinel);
+
+  ASSERT_OK_AND_ASSIGN(auto ok_mid,
+                       orc_adapter::GetArrowType(liborc::createDecimalType(18, 4).get()));
+  AssertTypeEqual(*decimal128(18, 4), *ok_mid);
+  ASSERT_OK_AND_ASSIGN(
+      auto ok_max,
+      orc_adapter::GetArrowType(liborc::createDecimalType(Decimal128Type::kMaxPrecision,
+                                                          Decimal128Type::kMaxPrecision)
+                                    .get()));
+  AssertTypeEqual(*decimal128(38, 38), *ok_max);
+}
+
 // Trivial
 
 class TestORCWriterTrivialNoWrite : public ::testing::Test {};
