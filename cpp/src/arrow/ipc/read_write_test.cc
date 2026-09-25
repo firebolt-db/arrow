@@ -17,9 +17,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <unordered_set>
@@ -886,6 +888,68 @@ TEST_F(TestWriteRecordBatch, WriteWithCompressionAndMinSavings) {
           Invalid, ::testing::StartsWith("Invalid: min_space_savings not in range [0,1]"),
           SerializeRecordBatch(*batch, write_options));
     }
+  }
+}
+
+TEST_F(TestWriteRecordBatch, ReadRejectsImpossibleUncompressedSize) {
+  // A compressed body buffer is prefixed with its uncompressed size. A size the codec
+  // cannot produce from the compressed bytes must be rejected before it is allocated.
+  auto batch = RecordBatchFromJSON(schema({field("n", int64())}), R"([
+    {"n":0},{"n":1},{"n":2},{"n":3},{"n":4},
+    {"n":5},{"n":6},{"n":7},{"n":8},{"n":9}])");
+
+  for (auto codec : {Compression::LZ4_FRAME, Compression::ZSTD}) {
+    if (!util::Codec::IsAvailable(codec)) {
+      continue;
+    }
+    auto write_options = IpcWriteOptions::Defaults();
+    ASSERT_OK_AND_ASSIGN(write_options.codec, util::Codec::Create(codec));
+
+    // Serialize the batch with the values buffer's uncompressed size replaced, and read
+    // it back, allocating from `pool`.
+    auto read_with_uncompressed_size =
+        [&](std::optional<int64_t> declared,
+            MemoryPool* pool =
+                default_memory_pool()) -> Result<std::shared_ptr<RecordBatch>> {
+      IpcPayload payload;
+      RETURN_NOT_OK(GetRecordBatchPayload(*batch, write_options, &payload));
+      if (declared.has_value()) {
+        const auto& values = payload.body_buffers[1];
+        ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Buffer> patched,
+                              AllocateBuffer(values->size()));
+        std::memcpy(patched->mutable_data(), values->data(), values->size());
+        const int64_t prefix = bit_util::ToLittleEndian(*declared);
+        std::memcpy(patched->mutable_data(), &prefix, sizeof(prefix));
+        payload.body_buffers[1] = patched;
+      }
+      ARROW_ASSIGN_OR_RAISE(auto stream, io::BufferOutputStream::Create());
+      int32_t metadata_length = -1;
+      RETURN_NOT_OK(
+          WriteIpcPayload(payload, write_options, stream.get(), &metadata_length));
+      ARROW_ASSIGN_OR_RAISE(auto serialized, stream->Finish());
+      io::BufferReader reader(serialized);
+      ARROW_ASSIGN_OR_RAISE(auto message, ReadMessage(&reader));
+      DictionaryMemo memo;
+      auto read_options = IpcReadOptions::Defaults();
+      read_options.memory_pool = pool;
+      return ReadRecordBatch(*message, batch->schema(), &memo, read_options);
+    };
+
+    ASSERT_OK_AND_ASSIGN(auto roundtripped, read_with_uncompressed_size(std::nullopt));
+    AssertBatchesEqual(*batch, *roundtripped);
+
+    IpcPayload payload;
+    ASSERT_OK(GetRecordBatchPayload(*batch, write_options, &payload));
+    const int64_t compressed_size = payload.body_buffers[1]->size() - sizeof(int64_t);
+    const int64_t max_ratio = codec == Compression::LZ4_FRAME ? 255 : 32768;
+    const int64_t impossible_size = compressed_size * max_ratio + 1;
+    ProxyMemoryPool pool(default_memory_pool());
+    EXPECT_RAISES_WITH_MESSAGE_THAT(Invalid, ::testing::HasSubstr("can decompress from"),
+                                    read_with_uncompressed_size(impossible_size, &pool));
+    ASSERT_LT(pool.max_memory(), impossible_size);
+    EXPECT_RAISES_WITH_MESSAGE_THAT(Invalid,
+                                    ::testing::HasSubstr("negative uncompressed size"),
+                                    read_with_uncompressed_size(-2));
   }
 }
 

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -562,6 +563,22 @@ class ArrayLoader {
   ArrayData* out_ = nullptr;
 };
 
+// The most output one byte of a compressed IPC buffer can decode to. An LZ4 match
+// spends at least one byte per 255 bytes of match length; a ZSTD RLE block expands
+// one byte into at most one 128 KiB block behind a 3-byte header. A declared size
+// beyond this cannot be genuine, and allocating it would let a small message
+// request any amount of memory.
+int64_t MaxDecompressionRatio(Compression::type compression) {
+  switch (compression) {
+    case Compression::LZ4_FRAME:
+      return 255;
+    case Compression::ZSTD:
+      return 32768;
+    default:
+      return std::numeric_limits<int64_t>::max();
+  }
+}
+
 Result<std::shared_ptr<Buffer>> DecompressBuffer(const std::shared_ptr<Buffer>& buf,
                                                  const IpcReadOptions& options,
                                                  util::Codec* codec) {
@@ -581,6 +598,18 @@ Result<std::shared_ptr<Buffer>> DecompressBuffer(const std::shared_ptr<Buffer>& 
 
   if (uncompressed_size == -1) {
     return SliceBuffer(buf, sizeof(int64_t), compressed_size);
+  }
+
+  if (uncompressed_size < 0) {
+    return Status::Invalid("Likely corrupted message, negative uncompressed size ",
+                           uncompressed_size);
+  }
+  const int64_t max_ratio = MaxDecompressionRatio(codec->compression_type());
+  if (compressed_size < std::numeric_limits<int64_t>::max() / max_ratio &&
+      uncompressed_size > compressed_size * max_ratio) {
+    return Status::Invalid("Likely corrupted message, uncompressed size ",
+                           uncompressed_size, " is more than ", codec->name(),
+                           " can decompress from ", compressed_size, " bytes");
   }
 
   ARROW_ASSIGN_OR_RAISE(auto uncompressed,
