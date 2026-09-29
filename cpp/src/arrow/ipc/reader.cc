@@ -562,6 +562,76 @@ class ArrayLoader {
   ArrayData* out_ = nullptr;
 };
 
+// Matches the message body cap in ArrowInputStreamFromReadBuffer; real buffers
+// are rarely larger, so they keep the one-shot path.
+constexpr int64_t kMaxTrustedUncompressedSize = int64_t{64} << 20;
+
+// Most output one input byte can produce: an LZ4 match length grows by 255 per
+// extension byte, and a ZSTD block yields at most 128 KiB from at least 4 bytes.
+int64_t MaxExpansion(Compression::type compression) {
+  switch (compression) {
+    case Compression::LZ4_FRAME:
+      return 255;
+    case Compression::ZSTD:
+      return (int64_t{128} << 10) / 4;
+    default:
+      return 0;
+  }
+}
+
+// Decompresses into a buffer that starts at kMaxTrustedUncompressedSize and
+// doubles, capped at `uncompressed_size`.
+Result<std::shared_ptr<Buffer>> StreamDecompressBuffer(const uint8_t* input,
+                                                       int64_t input_len,
+                                                       int64_t uncompressed_size,
+                                                       const IpcReadOptions& options,
+                                                       util::Codec* codec) {
+  ARROW_ASSIGN_OR_RAISE(auto decompressor, codec->MakeDecompressor());
+  ARROW_ASSIGN_OR_RAISE(
+      std::shared_ptr<ResizableBuffer> out,
+      AllocateResizableBuffer(kMaxTrustedUncompressedSize, options.memory_pool));
+
+  int64_t produced = 0;
+  while (!decompressor->IsFinished() && produced < uncompressed_size) {
+    if (produced == out->size()) {
+      RETURN_NOT_OK(out->Resize(std::min(out->size() * 2, uncompressed_size),
+                                /*shrink_to_fit=*/false));
+    }
+    ARROW_ASSIGN_OR_RAISE(auto result,
+                          decompressor->Decompress(input_len, input, out->size() - produced,
+                                                   out->mutable_data() + produced));
+    input += result.bytes_read;
+    input_len -= result.bytes_read;
+    produced += result.bytes_written;
+    if (result.bytes_read == 0 && result.bytes_written == 0) {
+      break;  // truncated input
+    }
+  }
+
+  // At the declared size the stream may still hold trailer bytes; any further
+  // output means it expands past what was declared.
+  uint8_t probe[64];
+  while (produced == uncompressed_size && !decompressor->IsFinished()) {
+    ARROW_ASSIGN_OR_RAISE(auto result, decompressor->Decompress(input_len, input,
+                                                                sizeof(probe), probe));
+    if (result.bytes_written > 0) {
+      return Status::Invalid("Compressed buffer expands past its declared ",
+                             uncompressed_size, " bytes");
+    }
+    if (result.bytes_read == 0) {
+      break;
+    }
+    input += result.bytes_read;
+    input_len -= result.bytes_read;
+  }
+
+  if (produced != uncompressed_size) {
+    return Status::Invalid("Failed to fully decompress buffer, expected ",
+                           uncompressed_size, " bytes but decompressed ", produced);
+  }
+  return out;
+}
+
 Result<std::shared_ptr<Buffer>> DecompressBuffer(const std::shared_ptr<Buffer>& buf,
                                                  const IpcReadOptions& options,
                                                  util::Codec* codec) {
@@ -581,6 +651,21 @@ Result<std::shared_ptr<Buffer>> DecompressBuffer(const std::shared_ptr<Buffer>& 
 
   if (uncompressed_size == -1) {
     return SliceBuffer(buf, sizeof(int64_t), compressed_size);
+  }
+  if (uncompressed_size < 0) {
+    return Status::Invalid("Negative uncompressed buffer length ", uncompressed_size);
+  }
+  // The declared length comes from the file: reject what the codec cannot
+  // produce, and past the trusted size grow with the real output instead.
+  if (const int64_t expansion = MaxExpansion(codec->compression_type());
+      expansion > 0 && uncompressed_size / expansion > compressed_size) {
+    return Status::Invalid("Compressed buffer of ", compressed_size,
+                           " bytes cannot decompress to the declared ",
+                           uncompressed_size, " bytes");
+  }
+  if (uncompressed_size > kMaxTrustedUncompressedSize) {
+    return StreamDecompressBuffer(data + sizeof(int64_t), compressed_size,
+                                  uncompressed_size, options, codec);
   }
 
   ARROW_ASSIGN_OR_RAISE(auto uncompressed,
