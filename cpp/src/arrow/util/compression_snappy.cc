@@ -17,14 +17,17 @@
 
 #include "arrow/util/compression_internal.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 
 #include <snappy-sinksource.h>
 #include <snappy.h>
 
+#include "arrow/buffer.h"
 #include "arrow/corded_buffer.h"
 #include "arrow/result.h"
 #include "arrow/status.h"
@@ -206,6 +209,56 @@ class SnappyCordedCodec : public CordedCodec {
 }  // namespace
 
 std::unique_ptr<Codec> MakeSnappyCodec() { return std::make_unique<SnappyCodec>(); }
+
+Result<int64_t> DecompressSnappyToBuffer(int64_t input_len, const uint8_t* input,
+                                         int64_t output_len, ResizableBuffer* output,
+                                         int64_t output_offset) {
+  size_t declared_size;
+  if (!snappy::GetUncompressedLength(reinterpret_cast<const char*>(input),
+                                     static_cast<size_t>(input_len), &declared_size) ||
+      declared_size != static_cast<size_t>(output_len)) {
+    return Status::IOError("Snappy length disagrees with the Parquet page header");
+  }
+
+  // Keep Snappy on its scattered path: a frame's length prefix is untrusted too.
+  class BufferSink final : public snappy::Sink {
+   public:
+    BufferSink(ResizableBuffer* output, int64_t offset, int64_t limit)
+        : output_(output), position_(offset), limit_(limit) {}
+
+    void Append(const char* bytes, size_t size) override {
+      if (!status_.ok()) return;
+      if (size > static_cast<size_t>(limit_ - position_)) {
+        status_ = Status::IOError("Snappy output exceeds the Parquet page header");
+        return;
+      }
+      const int64_t end = position_ + static_cast<int64_t>(size);
+      if (end > output_->size()) {
+        status_ = output_->Resize(std::max(end, std::min(output_->size() * 2, limit_)),
+                                  /*shrink_to_fit=*/false);
+        if (!status_.ok()) return;
+      }
+      std::memcpy(output_->mutable_data() + position_, bytes, size);
+      position_ = end;
+    }
+
+    const Status& status() const { return status_; }
+    int64_t position() const { return position_; }
+
+   private:
+    ResizableBuffer* output_;
+    int64_t position_;
+    int64_t limit_;
+    Status status_;
+  } sink(output, output_offset, output_offset + output_len);
+
+  snappy::ByteArraySource source(reinterpret_cast<const char*>(input),
+                                 static_cast<size_t>(input_len));
+  const bool success = snappy::Uncompress(&source, &sink);
+  RETURN_NOT_OK(sink.status());
+  if (!success) return Status::IOError("Corrupt snappy compressed data");
+  return sink.position() - output_offset;
+}
 
 std::unique_ptr<CordedCodec> MakeSnappyCordedCodec() {
   return std::make_unique<SnappyCordedCodec>();

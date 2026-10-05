@@ -55,6 +55,12 @@ std::unique_ptr<Codec> MakeGZipCodec(int compression_level = kGZipDefaultCompres
 // Snappy
 std::unique_ptr<Codec> MakeSnappyCodec();
 
+ARROW_EXPORT Result<int64_t> DecompressSnappyToBuffer(int64_t input_len,
+                                                      const uint8_t* input,
+                                                      int64_t output_len,
+                                                      ResizableBuffer* output,
+                                                      int64_t output_offset);
+
 // Lz4 Codecs
 constexpr int kLz4DefaultCompressionLevel = 1;
 
