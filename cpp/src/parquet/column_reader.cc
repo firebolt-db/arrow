@@ -44,6 +44,7 @@
 #include "arrow/util/bit_util.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/compression.h"
+#include "arrow/util/compression_internal.h"
 #include "arrow/util/crc32.h"
 #include "arrow/util/int_util_overflow.h"
 #include "arrow/util/logging.h"
@@ -86,6 +87,8 @@ constexpr int64_t kMinLevelBatchSize = 1024;
 // Batch size for reading and throwing away values during skip.
 // Both RecordReader and the ColumnReader use this for skipping.
 constexpr int64_t kSkipScratchBatchSize = 1024;
+
+constexpr int64_t kMaxOneShotPageSize = int64_t{64} << 20;
 
 // Throws exception if number_decoded does not match expected.
 inline void CheckNumberDecoded(int64_t number_decoded, int64_t expected) {
@@ -266,7 +269,10 @@ class SerializedPageReader : public PageReader {
   std::shared_ptr<Buffer> DecompressIfNeeded(PlainOrCordedBuffer page_buffer,
                                              int compressed_len, int uncompressed_len,
                                              int levels_byte_len = 0,
-                                             bool is_uncompressed_corded_buffer = false);
+                                             bool is_uncompressed = false);
+
+  int64_t DecompressLargePage(const uint8_t* input, int64_t input_len, int64_t output_len,
+                              int64_t output_offset);
 
   // Returns true for non-data pages, and if we should skip based on
   // data_page_filter_. Performs basic checks on values in the page header.
@@ -281,6 +287,8 @@ class SerializedPageReader : public PageReader {
   // Compression codec to use.
   std::unique_ptr<::arrow::util::Codec> decompressor_;
   std::shared_ptr<ResizableBuffer> decompression_buffer_;
+  std::unique_ptr<::arrow::util::Codec> large_page_codec_;
+  std::shared_ptr<::arrow::util::Decompressor> streaming_decompressor_;
 
   bool always_compressed_;
 
@@ -584,17 +592,14 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
 
       // Uncompress if needed
       int levels_byte_len;
-      if (AddWithOverflow(header.definition_levels_byte_length,
+      if (header.definition_levels_byte_length < 0 ||
+          header.repetition_levels_byte_length < 0 ||
+          AddWithOverflow(header.definition_levels_byte_length,
                           header.repetition_levels_byte_length, &levels_byte_len)) {
         throw ParquetException("Levels size too large (corrupt file?)");
       }
-      // DecompressIfNeeded doesn't take `is_compressed` into account as
-      // it's page type-agnostic.  Corded buffers always need to be decompressed.
-      if (is_compressed || properties_.firebolt_corded_buffers()) {
-        page_buffer =
-            DecompressIfNeeded(std::move(page_buffer), compressed_len, uncompressed_len,
-                               levels_byte_len, !is_compressed);
-      }
+      page_buffer = DecompressIfNeeded(std::move(page_buffer), compressed_len,
+                                       uncompressed_len, levels_byte_len, !is_compressed);
       ARROW_DCHECK(std::holds_alternative<std::shared_ptr<Buffer>>(page_buffer));
 
       return std::make_shared<DataPageV2>(
@@ -610,12 +615,79 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
   return std::shared_ptr<Page>(nullptr);
 }
 
-// is_uncompressed_corded_buffer is there to do a memcpy from a corded to a non-corded
-// buffer for uncompressed pages, this is sadly required when using Firebolt's corded
-// buffers.
+int64_t SerializedPageReader::DecompressLargePage(const uint8_t* input, int64_t input_len,
+                                                  int64_t output_len,
+                                                  int64_t output_offset) {
+  auto* codec = decompressor_.get();
+  if (properties_.firebolt_corded_buffers()) {
+    if (!large_page_codec_) {
+      large_page_codec_ = GetCodec(decompressor_->compression_type());
+    }
+    codec = large_page_codec_.get();
+  }
+  const auto compression = codec->compression_type();
+  if (compression == Compression::LZ4 || compression == Compression::LZ4_HADOOP) {
+    PARQUET_ASSIGN_OR_THROW(
+        auto produced,
+        codec->Decompress(input_len, input, output_len,
+                          decompression_buffer_->mutable_data() + output_offset));
+    return produced;
+  }
+#ifdef ARROW_WITH_SNAPPY
+  if (compression == Compression::SNAPPY) {
+    PARQUET_ASSIGN_OR_THROW(
+        auto produced,
+        ::arrow::util::internal::DecompressSnappyToBuffer(
+            input_len, input, output_len, decompression_buffer_.get(), output_offset));
+    return produced;
+  }
+#endif
+  if (!streaming_decompressor_) {
+    PARQUET_ASSIGN_OR_THROW(streaming_decompressor_, codec->MakeDecompressor());
+  } else {
+    PARQUET_THROW_NOT_OK(streaming_decompressor_->Reset());
+  }
+  int64_t produced = output_offset;
+  const int64_t limit = output_offset + output_len;
+  uint8_t probe[64];
+  while (true) {
+    if (streaming_decompressor_->IsFinished()) {
+      if (input_len == 0) break;
+      // The one-shot GZIP and ZSTD codecs accept concatenated frames.
+      if (compression != Compression::GZIP && compression != Compression::ZSTD) {
+        throw ParquetException("Trailing bytes after compressed page");
+      }
+      PARQUET_THROW_NOT_OK(streaming_decompressor_->Reset());
+    }
+    const bool at_limit = produced == limit;
+    if (!at_limit && produced == decompression_buffer_->size()) {
+      PARQUET_THROW_NOT_OK(decompression_buffer_->Resize(
+          std::min(decompression_buffer_->size() * 2, limit), false));
+    }
+    PARQUET_ASSIGN_OR_THROW(
+        auto result,
+        streaming_decompressor_->Decompress(
+            input_len, input,
+            at_limit ? static_cast<int64_t>(sizeof(probe))
+                     : decompression_buffer_->size() - produced,
+            at_limit ? probe : decompression_buffer_->mutable_data() + produced));
+    if (at_limit && result.bytes_written > 0) {
+      throw ParquetException("Compressed page exceeds its declared uncompressed size");
+    }
+    if (result.bytes_read == 0 && result.bytes_written == 0 &&
+        !streaming_decompressor_->IsFinished()) {
+      throw ParquetException("Truncated compressed page");
+    }
+    input += result.bytes_read;
+    input_len -= result.bytes_read;
+    produced += result.bytes_written;
+  }
+  return produced - output_offset;
+}
+
 std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
     PlainOrCordedBuffer page_buffer, int compressed_len, int uncompressed_len,
-    int levels_byte_len, bool is_uncompressed_corded_buffer) {
+    int levels_byte_len, bool is_uncompressed) {
   // Sanity check: correct buffer type passed
   std::shared_ptr<Buffer> plain_buffer;
   std::optional<CordedBuffer> corded_buffer;
@@ -631,19 +703,35 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
     plain_buffer = std::get<std::shared_ptr<Buffer>>(page_buffer);
   }
 
-  if (decompressor_ == nullptr) {
-    if (properties_.firebolt_corded_buffers()) {
-      throw ParquetException("No decompressor");
-    }
-    return plain_buffer;
-  }
-  if (compressed_len < levels_byte_len || uncompressed_len < levels_byte_len) {
+  if (levels_byte_len < 0 || compressed_len < levels_byte_len ||
+      uncompressed_len < levels_byte_len) {
     throw ParquetException("Invalid page header");
   }
+  is_uncompressed = is_uncompressed || decompressor_ == nullptr ||
+                    decompressor_->compression_type() == Compression::UNCOMPRESSED;
+  const int64_t input_len = compressed_len - levels_byte_len;
+  const int64_t output_len = uncompressed_len - levels_byte_len;
+  if ((is_uncompressed && compressed_len != uncompressed_len) ||
+      (input_len == 0 && output_len != 0)) {
+    throw ParquetException("Invalid page header: inconsistent uncompressed size");
+  }
+  if (is_uncompressed && plain_buffer) return plain_buffer;
 
-  // Grow the uncompressed buffer if we need to.
-  PARQUET_THROW_NOT_OK(
-      decompression_buffer_->Resize(uncompressed_len, /*shrink_to_fit=*/false));
+  const bool large_page = !is_uncompressed && uncompressed_len > kMaxOneShotPageSize;
+  const bool bounded_lz4 =
+      large_page && (decompressor_->compression_type() == Compression::LZ4 ||
+                     decompressor_->compression_type() == Compression::LZ4_HADOOP);
+  // A raw LZ4 match grows by at most 255 output bytes per input extension byte.
+  if (bounded_lz4 && output_len > input_len * 255) {
+    throw ParquetException("Invalid page header: impossible LZ4 expansion");
+  }
+
+  // Ordinary pages keep their one-shot decode; large claims grow with real output.
+  const int64_t initial_size =
+      large_page && !bounded_lz4
+          ? std::max(kMaxOneShotPageSize, static_cast<int64_t>(levels_byte_len))
+          : uncompressed_len;
+  PARQUET_THROW_NOT_OK(decompression_buffer_->Resize(initial_size, false));
 
   if (levels_byte_len > 0) {
     // First copy the levels as-is
@@ -671,9 +759,28 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
     const int64_t bytes_to_decompress = compressed_len - levels_byte_len;
     const int64_t expected_decompressed_len = uncompressed_len - levels_byte_len;
 
-    if (is_uncompressed_corded_buffer && corded_buffer.has_value()) {
+    if (is_uncompressed && corded_buffer.has_value()) {
       decompressed_len =
           ::arrow::util::MemcpyFromCorded(dest, *corded_buffer, bytes_to_decompress);
+    } else if (large_page) {
+      // Coalesce only the compressed bytes, and only on the large-page path.
+      std::shared_ptr<Buffer> input;
+      if (!corded_buffer) {
+        input = ::arrow::SliceBuffer(plain_buffer, levels_byte_len, bytes_to_decompress);
+      } else if (corded_buffer->RemainingBytesInCurrentSlice() >= bytes_to_decompress) {
+        auto view = corded_buffer->Peek(bytes_to_decompress);
+        input = std::make_shared<Buffer>(reinterpret_cast<const uint8_t*>(view.data()),
+                                         bytes_to_decompress);
+      } else {
+        auto contiguous = AllocateBuffer(properties_.memory_pool(), bytes_to_decompress);
+        if (::arrow::util::MemcpyFromCorded(contiguous->mutable_data(), *corded_buffer,
+                                            bytes_to_decompress) != bytes_to_decompress) {
+          throw ParquetException("Invalid page: premature end of compressed data");
+        }
+        input = std::move(contiguous);
+      }
+      decompressed_len = DecompressLargePage(input->data(), bytes_to_decompress,
+                                             expected_decompressed_len, levels_byte_len);
     } else if (properties_.firebolt_corded_buffers()) {
       auto* corded_decompressor = dynamic_cast<CordedCodec*>(decompressor_.get());
       if (corded_decompressor == nullptr)
