@@ -331,5 +331,13 @@ Result<std::unique_ptr<CordedCodec>> CordedCodec::Create(Compression::type codec
   return CordedCodec::Create(codec, CodecOptions{compression_level});
 }
 
+#ifndef ARROW_WITH_SNAPPY
+// Keep the symbol available independently of the caller's codec feature macros.
+Result<int64_t> internal::DecompressSnappyToBuffer(int64_t, const uint8_t*, int64_t,
+                                                  ResizableBuffer*, int64_t) {
+  return Status::NotImplemented("Snappy codec is not built");
+}
+#endif
+
 }  // namespace util
 }  // namespace arrow

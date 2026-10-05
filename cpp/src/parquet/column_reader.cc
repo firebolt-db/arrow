@@ -633,7 +633,6 @@ int64_t SerializedPageReader::DecompressLargePage(const uint8_t* input, int64_t 
                           decompression_buffer_->mutable_data() + output_offset));
     return produced;
   }
-#ifdef ARROW_WITH_SNAPPY
   if (compression == Compression::SNAPPY) {
     PARQUET_ASSIGN_OR_THROW(
         auto produced,
@@ -641,7 +640,6 @@ int64_t SerializedPageReader::DecompressLargePage(const uint8_t* input, int64_t 
             input_len, input, output_len, decompression_buffer_.get(), output_offset));
     return produced;
   }
-#endif
   if (!streaming_decompressor_) {
     PARQUET_ASSIGN_OR_THROW(streaming_decompressor_, codec->MakeDecompressor());
   } else {
