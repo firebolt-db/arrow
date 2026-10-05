@@ -29,13 +29,8 @@ void CordedBuffer::Advance(size_t n) noexcept {
     const auto& slice = slices_[slice_idx_];
     const int64_t remaining_to_skip = n - skipped;
     const int64_t this_slice_offset = std::exchange(slice_offset_, 0);
-    assert(this_slice_offset < static_cast<int64_t>(slice.size()));
+    assert(this_slice_offset <= static_cast<int64_t>(slice.size()));
     const int64_t available_in_slice = slice.size() - this_slice_offset;
-    if (remaining_to_skip == available_in_slice) {
-      // We advanced just to the page boundary, need to advance to the next page
-      ++slice_idx_;
-      return;
-    }
     if (remaining_to_skip < available_in_slice) {
       slice_offset_ = static_cast<int32_t>(remaining_to_skip + this_slice_offset);
       return;
