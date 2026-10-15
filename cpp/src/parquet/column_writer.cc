@@ -739,6 +739,41 @@ const std::shared_ptr<WriterProperties>& default_writer_properties() {
   return default_writer_properties;
 }
 
+// The encoding a column chunk continues in once its dictionary has grown past the size limit:
+// PLAIN, or the column's configured encoding when the properties ask for it (as parquet-rs
+// writes it). Only PLAIN and DELTA_LENGTH_BYTE_ARRAY are supported, the latter for BYTE_ARRAY
+// columns, so that an unsupported combination fails when the writer opens, not mid-write. The
+// delta encodings came with format 2.0, so like RLE for booleans (ColumnWriter::Make) they are
+// written to 2.x files with V2 data pages only; a 1.0 file or V1 pages keep PLAIN.
+Encoding::type DictionaryFallbackEncoding(const ColumnDescriptor* descr,
+                                          const WriterProperties* properties,
+                                          bool use_dictionary) {
+  if (!use_dictionary || !properties->dictionary_fallback_encoding_enabled() ||
+      properties->version() == ParquetVersion::PARQUET_1_0 ||
+      properties->data_page_version() != ParquetDataPageVersion::V2) {
+    return Encoding::PLAIN;
+  }
+  const Encoding::type encoding = properties->encoding(descr->path());
+  switch (encoding) {
+    case Encoding::UNKNOWN:  // the column default, which ColumnWriter::Make resolves to PLAIN
+    case Encoding::PLAIN:
+      return Encoding::PLAIN;
+    case Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      if (descr->physical_type() != Type::BYTE_ARRAY) {
+        throw ParquetException(
+            "DELTA_LENGTH_BYTE_ARRAY is a dictionary fallback encoding for BYTE_ARRAY "
+            "columns only, not for column " +
+            descr->path()->ToDotString());
+      }
+      return encoding;
+    default:
+      throw ParquetException("Encoding " + EncodingToString(encoding) +
+                             " is not supported as a dictionary fallback encoding, for "
+                             "column " +
+                             descr->path()->ToDotString());
+  }
+}
+
 class ColumnWriterImpl {
  public:
   ColumnWriterImpl(ColumnChunkMetaDataBuilder* metadata,
@@ -750,6 +785,7 @@ class ColumnWriterImpl {
         pager_(std::move(pager)),
         has_dictionary_(use_dictionary),
         encoding_(encoding),
+        fallback_encoding_(DictionaryFallbackEncoding(descr_, properties, use_dictionary)),
         properties_(properties),
         allocator_(properties->memory_pool()),
         num_buffered_values_(0),
@@ -860,6 +896,8 @@ class ColumnWriterImpl {
 
   bool has_dictionary_;
   Encoding::type encoding_;
+  // What the chunk continues in once the dictionary has grown past the limit.
+  const Encoding::type fallback_encoding_;
   const WriterProperties* properties_;
 
   LevelEncoder level_encoder_;
@@ -1846,37 +1884,37 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     }
   }
 
-  void FallbackToPlainEncoding() {
+  void FallbackToNonDictionaryEncoding() {
     if (IsDictionaryIndexEncoding(current_encoder_->encoding())) {
       WriteDictionaryPage();
       // Serialize the buffered Dictionary Indices
       FlushBufferedDataPages();
       fallback_ = true;
-      // Only PLAIN encoding is supported for fallback
-      current_encoder_ = MakeEncoder(ParquetType::type_num, Encoding::PLAIN, false,
+      // PLAIN, or the column's encoding with dictionary fallback encoding enabled.
+      current_encoder_ = MakeEncoder(ParquetType::type_num, fallback_encoding_, false,
                                      descr_, properties_->memory_pool());
       current_value_encoder_ = dynamic_cast<ValueEncoderType*>(current_encoder_.get());
       current_dict_encoder_ = nullptr;  // not using dict
-      encoding_ = Encoding::PLAIN;
+      encoding_ = fallback_encoding_;
     }
   }
 
   // Checks if the Dictionary Page size limit is reached
   // If the limit is reached, the Dictionary and Data Pages are serialized
-  // The encoding is switched to PLAIN
+  // The encoding is switched to the fallback encoding
   //
   // Only one Dictionary Page is written.
-  // Fallback to PLAIN if dictionary page limit is reached.
+  // Fallback to the fallback encoding if dictionary page limit is reached.
   void CheckDictionarySizeLimit() {
     if (!has_dictionary_ || fallback_) {
       // Either not using dictionary encoding, or we have already fallen back
-      // to PLAIN encoding because the size threshold was reached
+      // because the size threshold was reached
       return;
     }
 
     if (current_dict_encoder_->dict_encoded_size() >=
         properties_->dictionary_pagesize_limit()) {
-      FallbackToPlainEncoding();
+      FallbackToNonDictionaryEncoding();
     }
   }
 
@@ -2064,14 +2102,14 @@ Status TypedColumnWriterImpl<ParquetType>::WriteArrowDictionary(
     // will be out of sync with the indices in the Arrow array.
     // The easiest solution for this uncommon case is to fallback to plain encoding.
     if (dict_encoder->num_entries() != dictionary->length()) {
-      PARQUET_CATCH_NOT_OK(FallbackToPlainEncoding());
+      PARQUET_CATCH_NOT_OK(FallbackToNonDictionaryEncoding());
       return WriteDense();
     }
 
     preserved_dictionary_ = dictionary;
   } else if (!dictionary->Equals(*preserved_dictionary_)) {
     // Dictionary has changed
-    PARQUET_CATCH_NOT_OK(FallbackToPlainEncoding());
+    PARQUET_CATCH_NOT_OK(FallbackToNonDictionaryEncoding());
     return WriteDense();
   }
 

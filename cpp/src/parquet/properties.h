@@ -369,6 +369,7 @@ class PARQUET_EXPORT WriterProperties {
           created_by_(DEFAULT_CREATED_BY),
           store_decimal_as_integer_(false),
           page_checksum_enabled_(false),
+          dictionary_fallback_encoding_enabled_(false),
           size_statistics_level_(DEFAULT_SIZE_STATISTICS_LEVEL),
           content_defined_chunking_enabled_(false),
           content_defined_chunking_options_({}) {}
@@ -385,6 +386,8 @@ class PARQUET_EXPORT WriterProperties {
           created_by_(properties.created_by()),
           store_decimal_as_integer_(properties.store_decimal_as_integer()),
           page_checksum_enabled_(properties.page_checksum_enabled()),
+          dictionary_fallback_encoding_enabled_(
+              properties.dictionary_fallback_encoding_enabled()),
           size_statistics_level_(properties.size_statistics_level()),
           sorting_columns_(properties.sorting_columns()),
           default_column_properties_(properties.default_column_properties()),
@@ -530,10 +533,30 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
+    /// \brief Continue a column chunk whose dictionary has grown past
+    /// `dictionary_pagesize_limit` in the column's `encoding`, as parquet-rs does, instead of
+    /// in PLAIN.
+    ///
+    /// Only PLAIN and DELTA_LENGTH_BYTE_ARRAY are supported as the encoding to fall back to,
+    /// the latter for BYTE_ARRAY columns; a column writer for any other combination fails to
+    /// open. Applies to 2.x files with V2 data pages, as RLE for booleans does; a 1.0 file or
+    /// V1 pages fall back to PLAIN regardless. Off by default: without it the fallback is PLAIN
+    /// and a column's `encoding` only applies with dictionary encoding disabled.
+    Builder* enable_dictionary_fallback_encoding() {
+      dictionary_fallback_encoding_enabled_ = true;
+      return this;
+    }
+
+    Builder* disable_dictionary_fallback_encoding() {
+      dictionary_fallback_encoding_enabled_ = false;
+      return this;
+    }
+
     /// \brief Define the encoding that is used when we don't utilise dictionary encoding.
     //
     /// This is only applied if dictionary encoding is disabled. If the dictionary grows
-    /// too large we always fall back to the PLAIN encoding.
+    /// too large we fall back to the PLAIN encoding, or to this encoding with
+    /// `enable_dictionary_fallback_encoding()`.
     Builder* encoding(Encoding::type encoding_type) {
       if (encoding_type == Encoding::PLAIN_DICTIONARY ||
           encoding_type == Encoding::RLE_DICTIONARY) {
@@ -547,7 +570,8 @@ class PARQUET_EXPORT WriterProperties {
     /// \brief Define the encoding that is used when we don't utilise dictionary encoding.
     //
     /// This is only applied if dictionary encoding is disabled. If the dictionary grows
-    /// too large we always fall back to the PLAIN encoding.
+    /// too large we fall back to the PLAIN encoding, or to this encoding with
+    /// `enable_dictionary_fallback_encoding()`.
     Builder* encoding(const std::string& path, Encoding::type encoding_type) {
       if (encoding_type == Encoding::PLAIN_DICTIONARY ||
           encoding_type == Encoding::RLE_DICTIONARY) {
@@ -887,7 +911,8 @@ class PARQUET_EXPORT WriterProperties {
       return std::shared_ptr<WriterProperties>(new WriterProperties(
           pool_, dictionary_pagesize_limit_, write_batch_size_, max_row_group_length_,
           pagesize_, max_rows_per_page_, version_, created_by_, page_checksum_enabled_,
-          size_statistics_level_, std::move(file_encryption_properties_),
+          dictionary_fallback_encoding_enabled_, size_statistics_level_,
+          std::move(file_encryption_properties_),
           default_column_properties_, column_properties, data_page_version_,
           store_decimal_as_integer_, std::move(sorting_columns_),
           content_defined_chunking_enabled_, content_defined_chunking_options_));
@@ -907,6 +932,7 @@ class PARQUET_EXPORT WriterProperties {
     std::string created_by_;
     bool store_decimal_as_integer_;
     bool page_checksum_enabled_;
+    bool dictionary_fallback_encoding_enabled_;
     SizeStatisticsLevel size_statistics_level_;
 
     std::shared_ptr<FileEncryptionProperties> file_encryption_properties_;
@@ -951,6 +977,12 @@ class PARQUET_EXPORT WriterProperties {
   inline bool store_decimal_as_integer() const { return store_decimal_as_integer_; }
 
   inline bool page_checksum_enabled() const { return page_checksum_enabled_; }
+
+  /// Whether a column chunk whose dictionary has grown past the limit continues in the
+  /// column's `encoding` instead of PLAIN. See `Builder::enable_dictionary_fallback_encoding`.
+  inline bool dictionary_fallback_encoding_enabled() const {
+    return dictionary_fallback_encoding_enabled_;
+  }
 
   inline bool content_defined_chunking_enabled() const {
     return content_defined_chunking_enabled_;
@@ -1067,7 +1099,8 @@ class PARQUET_EXPORT WriterProperties {
       MemoryPool* pool, int64_t dictionary_pagesize_limit, int64_t write_batch_size,
       int64_t max_row_group_length, int64_t pagesize, int64_t max_rows_per_page,
       ParquetVersion::type version, const std::string& created_by,
-      bool page_write_checksum_enabled, SizeStatisticsLevel size_statistics_level,
+      bool page_write_checksum_enabled, bool dictionary_fallback_encoding_enabled,
+      SizeStatisticsLevel size_statistics_level,
       std::shared_ptr<FileEncryptionProperties> file_encryption_properties,
       const ColumnProperties& default_column_properties,
       const std::unordered_map<std::string, ColumnProperties>& column_properties,
@@ -1085,6 +1118,7 @@ class PARQUET_EXPORT WriterProperties {
         parquet_created_by_(created_by),
         store_decimal_as_integer_(store_short_decimal_as_integer),
         page_checksum_enabled_(page_write_checksum_enabled),
+        dictionary_fallback_encoding_enabled_(dictionary_fallback_encoding_enabled),
         size_statistics_level_(size_statistics_level),
         file_encryption_properties_(file_encryption_properties),
         sorting_columns_(std::move(sorting_columns)),
@@ -1104,6 +1138,7 @@ class PARQUET_EXPORT WriterProperties {
   std::string parquet_created_by_;
   bool store_decimal_as_integer_;
   bool page_checksum_enabled_;
+  bool dictionary_fallback_encoding_enabled_;
   SizeStatisticsLevel size_statistics_level_;
 
   std::shared_ptr<FileEncryptionProperties> file_encryption_properties_;
