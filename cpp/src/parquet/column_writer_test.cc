@@ -16,6 +16,7 @@
 // under the License.
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -114,7 +115,8 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
       const ParquetVersion::type version = ParquetVersion::PARQUET_1_0,
       const ParquetDataPageVersion data_page_version = ParquetDataPageVersion::V1,
       bool enable_checksum = false, int64_t page_size = kDefaultDataPageSize,
-      int64_t max_rows_per_page = kDefaultMaxRowsPerPage) {
+      int64_t max_rows_per_page = kDefaultMaxRowsPerPage,
+      std::optional<Encoding::type> dictionary_fallback_encoding = std::nullopt) {
     sink_ = CreateOutputStream();
     WriterProperties::Builder wp_builder;
     wp_builder.version(version)->data_page_version(data_page_version);
@@ -122,6 +124,10 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
         column_properties.encoding() == Encoding::RLE_DICTIONARY) {
       wp_builder.enable_dictionary();
       wp_builder.dictionary_pagesize_limit(DICTIONARY_PAGE_SIZE);
+      if (dictionary_fallback_encoding.has_value()) {
+        wp_builder.encoding(*dictionary_fallback_encoding)
+            ->enable_dictionary_fallback_encoding();
+      }
     } else {
       wp_builder.disable_dictionary();
       wp_builder.encoding(column_properties.encoding());
@@ -600,6 +606,109 @@ TEST_F(TestValuesWriterInt64Type, RequiredByteStreamSplit) {
 
 TEST_F(TestByteArrayValuesWriter, RequiredDeltaLengthByteArray) {
   this->TestRequiredWithEncoding(Encoding::DELTA_LENGTH_BYTE_ARRAY);
+}
+
+// With dictionary fallback encoding enabled, a BYTE_ARRAY column whose dictionary grows past
+// the limit continues in DELTA_LENGTH_BYTE_ARRAY, as parquet-rs writes it, instead of PLAIN.
+TEST_F(TestByteArrayValuesWriter, DictionaryFallbackToDeltaLengthByteArray) {
+  this->GenerateData(VERY_LARGE_SIZE);
+  ColumnProperties column_properties;
+  column_properties.set_dictionary_enabled(true);
+  column_properties.set_encoding(Encoding::RLE_DICTIONARY);
+  auto writer = this->BuildWriter(VERY_LARGE_SIZE, column_properties,
+                                  ParquetVersion::PARQUET_2_6, ParquetDataPageVersion::V2,
+                                  /*enable_checksum=*/false, kDefaultDataPageSize,
+                                  kDefaultMaxRowsPerPage, Encoding::DELTA_LENGTH_BYTE_ARRAY);
+  writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_);
+  writer->Close();
+
+  // Every row, so that the pages after the fallback are read too.
+  this->SetupValuesOut(VERY_LARGE_SIZE);
+  this->ReadColumnFully();
+  ASSERT_EQ(VERY_LARGE_SIZE, this->values_read_);
+  this->values_.resize(VERY_LARGE_SIZE);
+  ASSERT_EQ(this->values_, this->values_out_);
+
+  // PLAIN is the dictionary page's encoding; no data page has it.
+  const std::vector<Encoding::type> encodings_vector = this->metadata_encodings();
+  const std::set<Encoding::type> encodings(encodings_vector.begin(), encodings_vector.end());
+  const std::set<Encoding::type> expected({Encoding::RLE_DICTIONARY, Encoding::PLAIN,
+                                           Encoding::DELTA_LENGTH_BYTE_ARRAY, Encoding::RLE});
+  ASSERT_EQ(encodings, expected);
+
+  // The dictionary page, data pages of indices, then data pages of the fallback encoding.
+  const std::vector<parquet::PageEncodingStats> encoding_stats =
+      this->metadata_encoding_stats();
+  ASSERT_GE(encoding_stats.size(), 3u);
+  ASSERT_EQ(encoding_stats[0].page_type, PageType::DICTIONARY_PAGE);
+  ASSERT_EQ(encoding_stats[0].encoding, Encoding::PLAIN);
+  ASSERT_EQ(encoding_stats[1].encoding, Encoding::RLE_DICTIONARY);
+  ASSERT_EQ(encoding_stats.back().encoding, Encoding::DELTA_LENGTH_BYTE_ARRAY);
+  bool seen_fallback = false;
+  for (size_t i = 1; i < encoding_stats.size(); i++) {
+    ASSERT_NE(encoding_stats[i].page_type, PageType::DICTIONARY_PAGE);
+    seen_fallback |= encoding_stats[i].encoding == Encoding::DELTA_LENGTH_BYTE_ARRAY;
+    ASSERT_EQ(encoding_stats[i].encoding, seen_fallback ? Encoding::DELTA_LENGTH_BYTE_ARRAY
+                                                        : Encoding::RLE_DICTIONARY);
+  }
+}
+
+// Only PLAIN and DELTA_LENGTH_BYTE_ARRAY are dictionary fallback encodings, and the latter only
+// for BYTE_ARRAY columns; a writer for any other combination fails to open.
+TEST_F(TestByteArrayValuesWriter, DictionaryFallbackEncodingIsValidated) {
+  ColumnProperties column_properties;
+  column_properties.set_dictionary_enabled(true);
+  column_properties.set_encoding(Encoding::RLE_DICTIONARY);
+  EXPECT_THROW(this->BuildWriter(SMALL_SIZE, column_properties, ParquetVersion::PARQUET_2_6,
+                                 ParquetDataPageVersion::V2, /*enable_checksum=*/false,
+                                 kDefaultDataPageSize, kDefaultMaxRowsPerPage,
+                                 Encoding::DELTA_BYTE_ARRAY),
+               ParquetException);
+  EXPECT_NO_THROW(this->BuildWriter(SMALL_SIZE, column_properties,
+                                    ParquetVersion::PARQUET_2_6, ParquetDataPageVersion::V2,
+                                    /*enable_checksum=*/false, kDefaultDataPageSize,
+                                    kDefaultMaxRowsPerPage, Encoding::PLAIN));
+}
+
+// The delta encodings are format 2.0 encodings: a 1.0 file, or one with V1 data pages, keeps
+// PLAIN as its fallback even with the option on, as a boolean column keeps PLAIN over RLE there.
+TEST_F(TestByteArrayValuesWriter, DictionaryFallbackEncodingNeedsVersion2AndV2Pages) {
+  for (const auto [version, data_page_version] :
+       {std::pair{ParquetVersion::PARQUET_1_0, ParquetDataPageVersion::V1},
+        std::pair{ParquetVersion::PARQUET_1_0, ParquetDataPageVersion::V2},
+        std::pair{ParquetVersion::PARQUET_2_6, ParquetDataPageVersion::V1}}) {
+    this->GenerateData(VERY_LARGE_SIZE);
+    ColumnProperties column_properties;
+    column_properties.set_dictionary_enabled(true);
+    column_properties.set_encoding(version == ParquetVersion::PARQUET_1_0
+                                       ? Encoding::PLAIN_DICTIONARY
+                                       : Encoding::RLE_DICTIONARY);
+    auto writer = this->BuildWriter(VERY_LARGE_SIZE, column_properties, version,
+                                    data_page_version, /*enable_checksum=*/false,
+                                    kDefaultDataPageSize, kDefaultMaxRowsPerPage,
+                                    Encoding::DELTA_LENGTH_BYTE_ARRAY);
+    writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_);
+    writer->Close();
+    const std::vector<Encoding::type> encodings_vector = this->metadata_encodings();
+    const std::set<Encoding::type> encodings(encodings_vector.begin(),
+                                             encodings_vector.end());
+    ASSERT_EQ(encodings.count(Encoding::DELTA_LENGTH_BYTE_ARRAY), 0u);
+    const std::vector<parquet::PageEncodingStats> encoding_stats =
+        this->metadata_encoding_stats();
+    ASSERT_NE(encoding_stats.back().page_type, PageType::DICTIONARY_PAGE);
+    ASSERT_EQ(encoding_stats.back().encoding, Encoding::PLAIN);
+  }
+}
+
+TEST_F(TestValuesWriterInt32Type, DeltaLengthByteArrayIsNoDictionaryFallbackForInt32) {
+  ColumnProperties column_properties;
+  column_properties.set_dictionary_enabled(true);
+  column_properties.set_encoding(Encoding::RLE_DICTIONARY);
+  EXPECT_THROW(this->BuildWriter(SMALL_SIZE, column_properties, ParquetVersion::PARQUET_2_6,
+                                 ParquetDataPageVersion::V2, /*enable_checksum=*/false,
+                                 kDefaultDataPageSize, kDefaultMaxRowsPerPage,
+                                 Encoding::DELTA_LENGTH_BYTE_ARRAY),
+               ParquetException);
 }
 
 TEST_F(TestByteArrayValuesWriter, RequiredDeltaByteArray) {
