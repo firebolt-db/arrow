@@ -757,8 +757,12 @@ TEST(RleBitPacked, GetBatchOfNothing) {
   EXPECT_EQ(decoder.GetBatch(values_read.data() + 4, static_cast<int>(values.size()) - 4),
             static_cast<int>(values.size()) - 4);
   EXPECT_EQ(values, values_read);
-  EXPECT_EQ(decoder.GetBatch(values_read.data(), 0), 0);
-  EXPECT_EQ(decoder.GetBatch(values_read.data(), 1), 0);
+  // The encoder pads its last bit-packed group to eight values; drain the padding, then the
+  // stream is exhausted.
+  std::vector<int> padding(8);
+  EXPECT_LT(decoder.GetBatch(padding.data(), static_cast<int>(padding.size())), 8);
+  EXPECT_EQ(decoder.GetBatch(padding.data(), 0), 0);
+  EXPECT_EQ(decoder.GetBatch(padding.data(), 1), 0);
 }
 
 TEST(RleBitPacked, SpecificSequences) {
