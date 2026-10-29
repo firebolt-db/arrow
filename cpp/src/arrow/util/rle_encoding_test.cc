@@ -741,7 +741,8 @@ bool CheckRoundTrip(const std::vector<int>& values, int bit_width) {
 // inside a run and at the end.
 TEST(RleBitPacked, GetBatchOfNothing) {
   const std::vector<int> values = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0};
-  const int len = 64;
+  // The encoder needs room for its largest possible run, well beyond these few bytes.
+  const int len = 1024;
   uint8_t buffer[len];
   RleBitPackedEncoder encoder(buffer, len, /*bit_width=*/1);
   for (const int value : values) {
