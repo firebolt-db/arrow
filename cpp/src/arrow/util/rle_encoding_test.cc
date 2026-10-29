@@ -737,6 +737,30 @@ bool CheckRoundTrip(const std::vector<int>& values, int bit_width) {
   return true;
 }
 
+// A batch of nothing reads nothing and leaves the stream where it was, before the first value,
+// inside a run and at the end.
+TEST(RleBitPacked, GetBatchOfNothing) {
+  const std::vector<int> values = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0};
+  const int len = 64;
+  uint8_t buffer[len];
+  RleBitPackedEncoder encoder(buffer, len, /*bit_width=*/1);
+  for (const int value : values) {
+    ASSERT_TRUE(encoder.Put(value));
+  }
+  const int encoded_len = encoder.Flush();
+
+  RleBitPackedDecoder<int> decoder(buffer, encoded_len, /*bit_width=*/1);
+  std::vector<int> values_read(values.size());
+  EXPECT_EQ(decoder.GetBatch(values_read.data(), 0), 0);
+  EXPECT_EQ(decoder.GetBatch(values_read.data(), 4), 4);
+  EXPECT_EQ(decoder.GetBatch(values_read.data() + 4, 0), 0);
+  EXPECT_EQ(decoder.GetBatch(values_read.data() + 4, static_cast<int>(values.size()) - 4),
+            static_cast<int>(values.size()) - 4);
+  EXPECT_EQ(values, values_read);
+  EXPECT_EQ(decoder.GetBatch(values_read.data(), 0), 0);
+  EXPECT_EQ(decoder.GetBatch(values_read.data(), 1), 0);
+}
+
 TEST(RleBitPacked, SpecificSequences) {
   const int len = 1024;
   uint8_t expected_buffer[len];
